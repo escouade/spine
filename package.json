@@ -12,7 +12,9 @@
     "packages/electron",
     "packages/electron-ipc-gateway",
     "packages/http-gateway",
-    "apps/docs-site"
+    "apps/docs-site",
+    "examples/cls-request-context",
+    "examples/http-routes"
   ],
   "scripts": {
     "docs-site:dev": "nx run docs-site:dev",

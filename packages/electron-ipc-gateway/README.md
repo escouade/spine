@@ -120,7 +120,8 @@ export class AppErrorMapper implements ErrorMapper<ErrorCode> {
 
 ## Reference
 
-- Exports: `ElectronIpcGateway`, `ElectronIpcGatewayModule`, the route helper `handle` (and the deprecated `ipcRoutes` factory), `ipcFeature`, `IpcModule`, `IpcLoggingInterceptor`, `ZodValidator`, `DefaultErrorMapper`, and the `ElectronIpcBaseContext` / `ElectronIpcRaw` / `IpcContextRegistry` / `DefaultCtx` types.
+- Exports: `ElectronIpcGateway`, `ElectronIpcGatewayModule`, the route helper `handle` (and the deprecated `ipcRoutes` factory), `ipcFeature`, `IpcModule`, `IpcLoggingInterceptor`, `IpcLogRedactor`, `ZodValidator`, `DefaultErrorMapper`, and the `ElectronIpcBaseContext` / `ElectronIpcRaw` / `IpcContextRegistry` / `DefaultCtx` types.
+- **Log redaction:** `new IpcLoggingInterceptor(logger, redact)` — the optional `IpcLogRedactor` `(channel, input) => unknown` masks what gets logged (per-channel), never the input passed to the handler.
 - **Raw input:** `ipcRenderer.invoke(channel, arg)` → `arg` as `rawInput`; multiple args → `[a, b]`. Prefer a single object argument per call.
 
 ## Full docs

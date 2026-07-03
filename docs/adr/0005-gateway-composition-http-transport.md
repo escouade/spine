@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-07-01
-- **Scope**: `packages/gateway`, `packages/http-gateway`, `packages/electron-ipc-gateway`
+- **Scope**: `packages/gateway-core` (named `packages/gateway` at the time), `packages/http-gateway`, `packages/electron-ipc-gateway`
 - **Relation**: supersedes the **inheritance mechanism** of [ADR 0002](./0002-gateway-transport-agnostic.md) (the abstract `Gateway` base class). Keeps everything else of ADR 0002 (the 3-layer split, DI-injectable guards, the ports). Sibling of [ADR 0004](./0004-field-form-routes.md).
 
 ## Context

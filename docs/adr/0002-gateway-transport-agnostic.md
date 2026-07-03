@@ -2,7 +2,7 @@
 
 - **Status**: Accepted — **partially superseded** (see note below)
 - **Date**: 2026-06-29
-- **Scope**: `packages/gateway`, `packages/electron-ipc-gateway`, `packages/electron`
+- **Scope**: `packages/gateway-core` (named `packages/gateway` at the time), `packages/electron-ipc-gateway`, `packages/electron`
 - **Relation**: builds on the module/DI model defined in `packages/core`. Its route-declaration surface (`@Handler` methods) is superseded by [ADR 0004](./0004-field-form-routes.md); its **inheritance mechanism** (the abstract `Gateway` base class transports `extend`) is superseded by [ADR 0005](./0005-gateway-composition-http-transport.md).
 
 :::note Superseded parts
