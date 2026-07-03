@@ -95,6 +95,34 @@ Quand `interceptors` est omis, la gateway s'exécute sans aucun intercepteur.
 
 Câblez-le comme montré ci-dessus. L'intercepteur utilise le `loggerToken` de SpineJS, il récupère donc la même instance de logger que le reste de l'application.
 
+### Masquer les entrées sensibles
+
+Par défaut, l'entrée brute est journalisée telle quelle au niveau `debug` — des mots de passe ou tokens envoyés par IPC finiraient dans les logs. Passez un `IpcLogRedactor` comme second argument du constructeur pour masquer ce qui est journalisé ; il reçoit le canal, le masquage peut donc être par canal. L'entrée réelle transmise au handler n'est jamais modifiée :
+
+```typescript
+import {
+  IpcLoggingInterceptor,
+  IpcLogRedactor,
+} from "@spinejs/electron-ipc-gateway";
+
+const redact: IpcLogRedactor = (channel, input) =>
+  channel.startsWith("auth:") ? "[redacted]" : input;
+
+interceptors: {
+  inject: [loggerToken],
+  factory: (logger: Logger) => [new IpcLoggingInterceptor(logger, redact)],
+},
+```
+
+```
+→ auth:login "[redacted]"
+← auth:login ok
+→ chat:send {"content":"hello"}
+← chat:send ok
+```
+
+Le framework reste neutre : c'est l'application qui décide quels canaux ou champs masquer.
+
 ## Écrire des intercepteurs personnalisés
 
 Les intercepteurs peuvent injecter n'importe quel service et effectuer un travail asynchrone arbitraire avant et après le pipeline. Ils peuvent aussi court-circuiter en retournant une enveloppe sans appeler `next()` :

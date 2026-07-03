@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-07-01
-- **Scope**: `packages/gateway`, `packages/http-gateway`, `packages/electron-ipc-gateway`, `packages/core`
+- **Scope**: `packages/gateway-core` (named `packages/gateway` at the time), `packages/http-gateway`, `packages/electron-ipc-gateway`, `packages/core`
 - **Relation**: refines the transport-agnostic gateway of [ADR 0002](./0002-gateway-transport-agnostic.md). Supersedes its `@Handler`/method-route surface.
 
 ## Context

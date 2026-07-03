@@ -94,6 +94,34 @@ When `interceptors` is omitted, the gateway runs with no interceptors.
 
 Wire it as shown above. The interceptor uses the SpineJS `loggerToken` so it picks up the same logger instance as the rest of the app.
 
+### Redacting sensitive inputs
+
+By default the raw input is logged verbatim at `debug` level — passwords or tokens sent over IPC would land in the logs. Pass an `IpcLogRedactor` as the second constructor argument to mask what gets logged; it receives the channel, so redaction can be per-channel. The real input passed to the handler is never touched:
+
+```typescript
+import {
+  IpcLoggingInterceptor,
+  IpcLogRedactor,
+} from "@spinejs/electron-ipc-gateway";
+
+const redact: IpcLogRedactor = (channel, input) =>
+  channel.startsWith("auth:") ? "[redacted]" : input;
+
+interceptors: {
+  inject: [loggerToken],
+  factory: (logger: Logger) => [new IpcLoggingInterceptor(logger, redact)],
+},
+```
+
+```
+→ auth:login "[redacted]"
+← auth:login ok
+→ chat:send {"content":"hello"}
+← chat:send ok
+```
+
+The framework stays policy-free: the app decides which channels or fields to mask.
+
 ## Writing custom interceptors
 
 Interceptors can inject any service and perform arbitrary async work before and after the pipeline. They may also short-circuit by returning an envelope without calling `next()`:
