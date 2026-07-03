@@ -1,0 +1,55 @@
+:root {
+  --ifm-color-primary: #2563eb;
+  --ifm-color-primary-dark: #1d57d6;
+  --ifm-color-primary-darker: #1c52ca;
+  --ifm-color-primary-darkest: #1744a6;
+  --ifm-color-primary-light: #3d76ee;
+  --ifm-color-primary-lighter: #4a80ef;
+  --ifm-color-primary-lightest: #6f9af2;
+  --ifm-code-font-size: 90%;
+  --docusaurus-highlighted-code-line-bg: rgba(37, 99, 235, 0.1);
+}
+
+[data-theme="dark"] {
+  --ifm-background-color: #0e0e0e;
+  --ifm-background-surface-color: #1a1a1a;
+  --ifm-card-background-color: #161616;
+  --ifm-color-primary: #4a80ef;
+  --ifm-navbar-background-color: #111111;
+  --ifm-footer-background-color: #111111;
+  --docusaurus-highlighted-code-line-bg: rgba(37, 99, 235, 0.15);
+}
+
+[data-theme="light"] {
+  --ifm-card-background-color: #eee;
+}
+
+/* Navbar polish */
+.navbar {
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+  backdrop-filter: saturate(180%) blur(8px);
+}
+
+/* backdrop-filter turns .navbar into a containing block for its
+   position:fixed mobile sidebar, breaking its full-viewport offset.
+   Drop it below the sidebar breakpoint. */
+@media (max-width: 996px) {
+  .navbar {
+    backdrop-filter: none;
+  }
+}
+
+.navbar__title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Tighter, more scannable tables (used heavily across the docs) */
+.markdown table {
+  display: table;
+  width: 100%;
+}
+
+.markdown table th {
+  background: var(--ifm-color-emphasis-100);
+}

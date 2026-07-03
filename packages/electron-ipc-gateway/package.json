@@ -1,0 +1,25 @@
+{
+  "name": "@spinejs/electron-ipc-gateway",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./testing": {
+      "types": "./src/testing.ts",
+      "default": "./src/testing.ts"
+    }
+  },
+  "dependencies": {
+    "@spinejs/core": "workspace:*",
+    "@spinejs/gateway-core": "workspace:*",
+    "zod": "^3.25.76"
+  },
+  "peerDependencies": {
+    "electron": ">=30.0.0"
+  }
+}

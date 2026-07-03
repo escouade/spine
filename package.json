@@ -1,0 +1,51 @@
+{
+  "name": "@spinejs/source",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "workspaces": [
+    "packages/core",
+    "packages/gateway-core",
+    "packages/cls",
+    "packages/config",
+    "packages/winston-logger",
+    "packages/electron",
+    "packages/electron-ipc-gateway",
+    "packages/http-gateway",
+    "apps/docs-site"
+  ],
+  "scripts": {
+    "docs-site:dev": "nx run docs-site:dev",
+    "docs-site:build": "yarn workspace @spinejs/docs-site build",
+    "docs-site:serve": "yarn workspace @spinejs/docs-site serve",
+    "typecheck:all": "nx run-many -t typecheck --all",
+    "test:all": "nx run-many -t test --all",
+    "lint:all": "nx run-many -t lint --all",
+    "format:check": "prettier --check .",
+    "format:write": "prettier --write .",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json,md,css,html}": "prettier --write"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.15.0",
+    "@nx/eslint": "22.0.2",
+    "@nx/js": "22.0.2",
+    "@types/node": "20.19.9",
+    "electron": "^33.2.0",
+    "eslint": "9.15.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.8",
+    "nx": "22.0.2",
+    "prettier": "^2.6.2",
+    "tslib": "^2.3.0",
+    "typescript": "~5.9.2",
+    "typescript-eslint": "8.15.0",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "packageManager": "yarn@4.10.3"
+}

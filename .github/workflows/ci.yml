@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Lint, Typecheck & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate Yarn version
+        run: corepack prepare --activate
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Format check
+        run: yarn format:check
+
+      - name: Lint
+        run: yarn lint:all
+
+      - name: Typecheck
+        run: yarn typecheck:all
+
+      - name: Test
+        run: yarn test:all

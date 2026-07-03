@@ -1,0 +1,23 @@
+{
+  "name": "docs-site",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/docs-site",
+  "projectType": "application",
+  "tags": [],
+  "targets": {
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "yarn workspace @spinejs/docs-site start",
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "yarn workspace @spinejs/docs-site build",
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}

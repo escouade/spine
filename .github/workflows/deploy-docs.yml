@@ -1,0 +1,64 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/docs-site/**"
+      - ".github/workflows/deploy-docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Docusaurus
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate Yarn version
+        run: corepack prepare --activate
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build docs
+        run: yarn nx build docs-site
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/docs-site/build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

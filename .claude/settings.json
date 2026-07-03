@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(yarn *)",
+      "Bash(npx eslint *)",
+      "Bash(npx nx *)",
+      "Bash(git rm *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(yarn workspace *)",
+      "Bash(python3 -c ' *)",
+      "Bash(gh pr *)",
+      "Bash(git rebase *)",
+      "Bash(yarn lint:all)",
+      "Bash(yarn typecheck:all)",
+      "Bash(yarn test:all)",
+      "Bash(yarn docs:build)",
+      "Bash(git push *)",
+      "Bash(yarn format:check)",
+      "Bash(git mv *)",
+      "Bash(yarn format:write)",
+      "Bash(yarn install *)"
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+node_modules
+dist
+.nx
+*.log
+.yarn/cache
+.yarn/install-state.gz

@@ -1,0 +1,13 @@
+{
+  "name": "@spinejs-examples/cls-request-context",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/main.ts",
+  "types": "src/main.ts",
+  "dependencies": {
+    "@spinejs/core": "workspace:*",
+    "@spinejs/gateway-core": "workspace:*",
+    "@spinejs/electron-ipc-gateway": "workspace:*",
+    "@spinejs/cls": "workspace:*"
+  }
+}

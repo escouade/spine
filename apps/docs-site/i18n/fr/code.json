@@ -1,0 +1,53 @@
+{
+  "home.feature.noReflect.title": {
+    "message": "Sans reflect-metadata"
+  },
+  "home.feature.noReflect.body": {
+    "message": "Les décorateurs stockent leurs métadonnées dans de simples symboles de propriété directe. Pas de flag experimentalDecorators — les builds esbuild/swc standard fonctionnent, sans polyfill global ni surcharge inattendue à l'exécution."
+  },
+  "home.feature.transport.title": {
+    "message": "Indépendant du transport"
+  },
+  "home.feature.transport.body": {
+    "message": "Le pipeline Gateway sépare les contrôleurs de la couche de transport qui achemine les données — IPC, HTTP, WebSocket, ou rien du tout."
+  },
+  "home.feature.lifecycle.title": {
+    "message": "Cycle de vie structuré"
+  },
+  "home.feature.lifecycle.body": {
+    "message": "Chaque module suit init → start → stop. Arrêt propre, gestion des signaux et démontage ordonné inclus."
+  },
+  "home.feature.familiar.title": {
+    "message": "Des patterns familiers"
+  },
+  "home.feature.familiar.body": {
+    "message": "Modules, injection de dépendances, guards et validation — les patterns que vous connaissez déjà, pour une fraction du poids à l'exécution."
+  },
+  "home.feature.composable.title": {
+    "message": "Composable à la carte"
+  },
+  "home.feature.composable.body": {
+    "message": "Des packages en couches : prenez le cœur, ajoutez une gateway, branchez un transport. N'importez que ce dont votre process a réellement besoin."
+  },
+  "home.feature.longlived.title": {
+    "message": "Pensé pour tout process Node"
+  },
+  "home.feature.longlived.body": {
+    "message": "Workers d'arrière-plan, outils CLI, process d'applications desktop, fonctions serverless — tout ce qui dépasse un index.ts plat."
+  },
+  "home.hero.tagline": {
+    "message": "Modules, DI et cycle de vie pour les process Node."
+  },
+  "home.hero.getStarted": {
+    "message": "Commencer"
+  },
+  "home.hero.github": {
+    "message": "Voir sur GitHub"
+  },
+  "home.meta.title": {
+    "message": "SpineJS — Modules, DI et cycle de vie pour Node"
+  },
+  "home.meta.description": {
+    "message": "Modules, injection de dépendances et cycle de vie pour les process Node."
+  }
+}

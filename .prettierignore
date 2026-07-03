@@ -1,0 +1,5 @@
+# Build artifacts
+apps/docs-site/build
+apps/docs-site/.docusaurus
+dist
+coverage

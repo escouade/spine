@@ -1,0 +1,31 @@
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "rootDir": ".",
+    "sourceMap": true,
+    "declaration": false,
+    "moduleResolution": "bundler",
+    "importHelpers": true,
+    "target": "es2022",
+    "module": "esnext",
+    "lib": ["es2023"],
+    "skipLibCheck": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@spinejs/core": ["packages/core/src/index.ts"],
+      "@spinejs/gateway-core": ["packages/gateway-core/src/index.ts"],
+      "@spinejs/config": ["packages/config/src/index.ts"],
+      "@spinejs/winston-logger": ["packages/winston-logger/src/index.ts"],
+      "@spinejs/electron": ["packages/electron/src/index.ts"],
+      "@spinejs/electron-ipc-gateway": [
+        "packages/electron-ipc-gateway/src/index.ts"
+      ],
+      "@spinejs/http-gateway": ["packages/http-gateway/src/index.ts"]
+    }
+  },
+  "exclude": ["node_modules", "tmp"]
+}

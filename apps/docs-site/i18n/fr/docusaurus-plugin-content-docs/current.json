@@ -1,0 +1,26 @@
+{
+  "version.label": {
+    "message": "Actuel",
+    "description": "The label for version current"
+  },
+  "sidebar.mainSidebar.category.Core": {
+    "message": "Cœur",
+    "description": "The label for category 'Core' in sidebar 'mainSidebar'"
+  },
+  "sidebar.mainSidebar.category.Building an API": {
+    "message": "Construire une API",
+    "description": "The label for category 'Building an API' in sidebar 'mainSidebar'"
+  },
+  "sidebar.mainSidebar.category.Transports": {
+    "message": "Transports",
+    "description": "The label for category 'Transports' in sidebar 'mainSidebar'"
+  },
+  "sidebar.mainSidebar.category.Electron": {
+    "message": "Electron",
+    "description": "The label for category 'Electron' in sidebar 'mainSidebar'"
+  },
+  "sidebar.mainSidebar.category.Extensions": {
+    "message": "Extensions",
+    "description": "The label for category 'Extensions' in sidebar 'mainSidebar'"
+  }
+}
