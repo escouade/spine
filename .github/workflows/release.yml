@@ -1,0 +1,76 @@
+name: Release
+
+# Manual, one-click release of the @spinejs packages.
+#
+#   1. build every publishable package (dist/)
+#   2. nx release --skip-publish -> bump versions, write CHANGELOG, commit + tag, push
+#   3. yarn npm publish per package -> converts `workspace:*` to the real version
+#      and publishes to npm (yarn handles the workspace: protocol; npm does not)
+#
+# Requires an NPM_TOKEN repo secret: an npm "Automation" token for the @spinejs org.
+on:
+  workflow_dispatch:
+    inputs:
+      specifier:
+        description: "Version or bump (e.g. 0.1.0, patch, minor, major)"
+        required: true
+        default: "0.1.0"
+      first_release:
+        description: "First release (no prior git tag to diff against)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Dry run — version/changelog preview, no push, no publish"
+        type: boolean
+        default: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the release commit + tag, create the GitHub release
+      id-token: write # npm provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the changelog can diff against tags
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate Yarn version
+        run: corepack prepare --activate
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Build packages
+        run: yarn nx run-many -t build --projects=tag:publishable
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Version, changelog, tag
+        run: >-
+          yarn nx release ${{ inputs.specifier }}
+          --skip-publish
+          ${{ inputs.first_release && '--first-release' || '' }}
+          ${{ inputs.dry_run && '--dry-run' || '' }}
+          --yes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to npm
+        if: ${{ !inputs.dry_run }}
+        run: >-
+          yarn workspaces foreach --all --no-private --topological
+          npm publish --tolerate-republish --provenance --access public
+        env:
+          YARN_NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

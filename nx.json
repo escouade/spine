@@ -13,7 +13,8 @@
     "build": {
       "cache": true,
       "dependsOn": ["^build"],
-      "inputs": ["production", "^production"]
+      "inputs": ["production", "^production"],
+      "outputs": ["{projectRoot}/dist"]
     },
     "typecheck": {
       "cache": true,
@@ -44,5 +45,15 @@
         "targetName": "lint"
       }
     }
-  ]
+  ],
+  "release": {
+    "projects": ["tag:publishable"],
+    "projectsRelationship": "fixed",
+    "releaseTagPattern": "v{version}",
+    "changelog": {
+      "workspaceChangelog": {
+        "createRelease": "github"
+      }
+    }
+  }
 }

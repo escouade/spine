@@ -1,18 +1,56 @@
 {
   "name": "@spinejs/http-gateway",
-  "version": "0.0.1",
-  "private": true,
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "version": "0.1.0",
+  "description": "HTTP gateway for SpineJS built on Hono.",
+  "keywords": [
+    "spinejs",
+    "http",
+    "gateway",
+    "hono"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/escouade/spine.git",
+    "directory": "packages/http-gateway"
+  },
+  "homepage": "https://github.com/escouade/spine/tree/main/packages/http-gateway#readme",
+  "bugs": "https://github.com/escouade/spine/issues",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./testing": {
-      "types": "./src/testing.ts",
-      "default": "./src/testing.ts"
+      "import": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.js"
+      },
+      "require": {
+        "types": "./dist/testing.d.cts",
+        "default": "./dist/testing.cjs"
+      }
     }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.6",
