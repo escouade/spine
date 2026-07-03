@@ -4655,6 +4655,10 @@ __metadata:
     zod: "npm:^3.25.76"
   peerDependencies:
     electron: ">=30.0.0"
+    vitest: ">=2.0.0"
+  peerDependenciesMeta:
+    vitest:
+      optional: true
   languageName: unknown
   linkType: soft
 
