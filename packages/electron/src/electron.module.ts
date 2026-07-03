@@ -22,6 +22,7 @@ export const electronModuleOptionsToken =
 })
 export class ElectronModule implements OnInit {
   private shuttingDown = false;
+  private mainWindowRequested = false;
 
   constructor(
     private readonly appInstance: App,
@@ -35,6 +36,18 @@ export class ElectronModule implements OnInit {
 
     electronApp.on("window-all-closed", () => {
       if (process.platform !== "darwin") electronApp.quit();
+    });
+
+    // Registered once here — registering it inside createMainWindow() would add a
+    // new listener on every call (each macOS re-activation would stack another).
+    // Only re-creates once the app has explicitly opened its window.
+    electronApp.on("activate", () => {
+      if (
+        this.mainWindowRequested &&
+        BrowserWindow.getAllWindows().length === 0
+      ) {
+        this.createMainWindow();
+      }
     });
 
     electronApp.on("before-quit", (event) => {
@@ -53,14 +66,12 @@ export class ElectronModule implements OnInit {
   }
 
   createMainWindow(): void {
+    this.mainWindowRequested = true;
     this.windowService.createMainWindow(
       this.options.window,
       this.options.devUrl,
       this.options.packagePath
     );
-    electronApp.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) this.createMainWindow();
-    });
   }
 
   static configure(options: ElectronModuleOptions): DynamicModule {

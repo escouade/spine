@@ -102,13 +102,13 @@ Always pass `handleProcessExit: false` to `new App(…)` to avoid double-shutdow
 
 ### `ElectronModuleOptions`
 
-| Field         | Type                              | Description                                                           |
-| ------------- | --------------------------------- | --------------------------------------------------------------------- |
-| `window`      | `BrowserWindowConstructorOptions` | Passed to `new BrowserWindow(…)`. Persisted bounds are merged on top. |
-| `devUrl`      | `string`                          | URL loaded when `app.isPackaged === false` (Vite dev server).         |
-| `packagePath` | `string`                          | Path to the bundled renderer HTML, loaded in production.              |
+| Field         | Type                              | Description                                                                                                                                                                               |
+| ------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `window`      | `BrowserWindowConstructorOptions` | Passed to `new BrowserWindow(…)`. Persisted bounds are merged on top. Secure `webPreferences` defaults (`contextIsolation`, `nodeIntegration: false`, `sandbox`) applied; yours override. |
+| `devUrl`      | `string`                          | URL loaded when `app.isPackaged === false` (Vite dev server).                                                                                                                             |
+| `packagePath` | `string`                          | Path to the bundled renderer HTML, loaded in production.                                                                                                                                  |
 
-**macOS:** `window-all-closed` does not quit; the `activate` event (Dock click, no open window) re-creates the main window automatically.
+**macOS:** `window-all-closed` does not quit; the `activate` event (Dock click, no open window) re-creates the main window automatically — once your app has called `createMainWindow()` at least once.
 
 ## Full docs
 
