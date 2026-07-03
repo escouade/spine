@@ -20,7 +20,8 @@
       "Bash(yarn format:check)",
       "Bash(git mv *)",
       "Bash(yarn format:write)",
-      "Bash(yarn install *)"
+      "Bash(yarn install *)",
+      "Bash(npx prettier *)"
     ]
   }
 }
