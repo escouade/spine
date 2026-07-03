@@ -1,9 +1,46 @@
 {
   "name": "@spinejs/electron",
-  "version": "0.0.1",
-  "private": true,
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "version": "0.1.0",
+  "description": "Electron main-process integration for SpineJS.",
+  "keywords": [
+    "spinejs",
+    "electron",
+    "desktop"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/escouade/spine.git",
+    "directory": "packages/electron"
+  },
+  "homepage": "https://github.com/escouade/spine/tree/main/packages/electron#readme",
+  "bugs": "https://github.com/escouade/spine/issues",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup"
+  },
   "dependencies": {
     "@spinejs/core": "workspace:*"
   },

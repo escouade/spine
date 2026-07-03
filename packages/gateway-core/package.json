@@ -1,9 +1,47 @@
 {
   "name": "@spinejs/gateway-core",
-  "version": "0.0.1",
-  "private": true,
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "version": "0.1.0",
+  "description": "Transport-agnostic dispatch pipeline for SpineJS gateways.",
+  "keywords": [
+    "spinejs",
+    "gateway",
+    "dispatch",
+    "pipeline"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/escouade/spine.git",
+    "directory": "packages/gateway-core"
+  },
+  "homepage": "https://github.com/escouade/spine/tree/main/packages/gateway-core#readme",
+  "bugs": "https://github.com/escouade/spine/issues",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup"
+  },
   "dependencies": {
     "@spinejs/core": "workspace:*"
   }

@@ -1,9 +1,47 @@
 {
   "name": "@spinejs/winston-logger",
-  "version": "0.0.1",
-  "private": true,
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "version": "0.1.0",
+  "description": "Winston-based logger implementation for SpineJS.",
+  "keywords": [
+    "spinejs",
+    "logger",
+    "winston",
+    "logging"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/escouade/spine.git",
+    "directory": "packages/winston-logger"
+  },
+  "homepage": "https://github.com/escouade/spine/tree/main/packages/winston-logger#readme",
+  "bugs": "https://github.com/escouade/spine/issues",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup"
+  },
   "dependencies": {
     "@spinejs/core": "workspace:*",
     "fast-safe-stringify": "^2.1.1",
