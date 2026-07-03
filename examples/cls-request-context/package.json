@@ -5,9 +5,9 @@
   "main": "src/main.ts",
   "types": "src/main.ts",
   "dependencies": {
+    "@spinejs/cls": "workspace:*",
     "@spinejs/core": "workspace:*",
-    "@spinejs/gateway-core": "workspace:*",
     "@spinejs/electron-ipc-gateway": "workspace:*",
-    "@spinejs/cls": "workspace:*"
+    "@spinejs/gateway-core": "workspace:*"
   }
 }
