@@ -38,11 +38,11 @@ ElectronModule.configure({
 
 ### `ElectronModuleOptions`
 
-| Field         | Type                              | Description                                                                                                                                          |
-| ------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `window`      | `BrowserWindowConstructorOptions` | Passed directly to `new BrowserWindow(...)`. Window bounds (position and size) are persisted between sessions and merged in on top of these options. |
-| `devUrl`      | `string`                          | URL loaded in development (`app.isPackaged === false` and `E2E_LOAD_FILE !== '1'`). Typically your Vite dev server.                                  |
-| `packagePath` | `string`                          | Path to the bundled renderer HTML file, loaded in production.                                                                                        |
+| Field         | Type                              | Description                                                                                                                                                                                                                                                                                              |
+| ------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `window`      | `BrowserWindowConstructorOptions` | Passed to `new BrowserWindow(...)`. Window bounds (position and size) are persisted between sessions and merged in on top of these options. Secure `webPreferences` defaults (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`) are applied; your own `webPreferences` override them. |
+| `devUrl`      | `string`                          | URL loaded in development (`app.isPackaged === false` and `E2E_LOAD_FILE !== '1'`). Typically your Vite dev server.                                                                                                                                                                                      |
+| `packagePath` | `string`                          | Path to the bundled renderer HTML file, loaded in production.                                                                                                                                                                                                                                            |
 
 ## Window creation
 
@@ -91,12 +91,12 @@ import { WindowService, windowServiceToken } from "@spinejs/electron";
 
 ### `createMainWindow(windowOptions, devUrl, packagePath)`
 
-Creates the `BrowserWindow` with the given options, merged with the last persisted bounds (position + size). Loads:
+Creates the `BrowserWindow` with the given options, merged with the last persisted bounds (position + size) and the secure `webPreferences` defaults (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` — overridable per option). Loads:
 
 - `devUrl` in development (when `app.isPackaged === false` and `E2E_LOAD_FILE !== '1'`).
 - `packagePath` in production.
 
-Persists the window bounds to `userData/window-state.json` on `resize` and `move` events (debounced at 300 ms).
+Persists the window bounds to `userData/window-state.json` on `resize` and `move` events (debounced at 300 ms), and flushes any pending save when the window closes.
 
 ### `getMainWindow()`
 
@@ -167,10 +167,12 @@ export class DeepLinkModule {
 `window-all-closed` does not call `app.quit()` on macOS (the standard macOS convention is to keep the app running in the Dock until the user explicitly quits). The `activate` event (Dock click with no open windows) re-creates the main window:
 
 ```typescript
-// Inside ElectronModule.createMainWindow():
+// Registered once inside ElectronModule.onInit():
 electronApp.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) this.createMainWindow();
+  if (mainWindowRequested && BrowserWindow.getAllWindows().length === 0) {
+    this.createMainWindow();
+  }
 });
 ```
 
-This is handled automatically — no configuration needed.
+This is handled automatically — no configuration needed. The window is only re-created once your app has called `createMainWindow()` at least once, so an app that keeps its window closed on purpose is not surprised by a Dock click.

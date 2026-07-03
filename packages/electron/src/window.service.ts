@@ -20,6 +20,13 @@ export class WindowService {
   ): void {
     this.mainWindow = new BrowserWindow({
       ...windowOptions,
+      // Secure-by-default renderer isolation; the app's own webPreferences win.
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        ...windowOptions.webPreferences,
+      },
       ...this.loadBounds(),
     });
 
@@ -32,6 +39,12 @@ export class WindowService {
     const persist = () => this.scheduleSaveBounds();
     this.mainWindow.on("resize", persist);
     this.mainWindow.on("move", persist);
+    // Flush a pending debounced save: a window closed within the 300 ms window
+    // would otherwise lose its final bounds.
+    this.mainWindow.on("close", () => {
+      if (this.saveBoundsTimer) clearTimeout(this.saveBoundsTimer);
+      this.saveBounds();
+    });
     this.mainWindow.on("closed", () => {
       this.mainWindow = null;
       this.logger.info("Main window closed", WindowService.name);

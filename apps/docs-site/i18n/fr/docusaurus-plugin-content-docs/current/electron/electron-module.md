@@ -38,11 +38,11 @@ ElectronModule.configure({
 
 ### `ElectronModuleOptions`
 
-| Champ         | Type                              | Description                                                                                                                                                          |
-| ------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `window`      | `BrowserWindowConstructorOptions` | Passé directement à `new BrowserWindow(...)`. Les bornes de la fenêtre (position et taille) sont persistées entre les sessions et fusionnées par-dessus ces options. |
-| `devUrl`      | `string`                          | URL chargée en développement (`app.isPackaged === false` et `E2E_LOAD_FILE !== '1'`). Typiquement votre serveur de dev Vite.                                         |
-| `packagePath` | `string`                          | Chemin vers le fichier HTML du renderer bundlé, chargé en production.                                                                                                |
+| Champ         | Type                              | Description                                                                                                                                                                                                                                                                                                                             |
+| ------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `window`      | `BrowserWindowConstructorOptions` | Passé à `new BrowserWindow(...)`. Les bornes de la fenêtre (position et taille) sont persistées entre les sessions et fusionnées par-dessus ces options. Des `webPreferences` sécurisés par défaut (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`) sont appliqués ; vos propres `webPreferences` les surchargent. |
+| `devUrl`      | `string`                          | URL chargée en développement (`app.isPackaged === false` et `E2E_LOAD_FILE !== '1'`). Typiquement votre serveur de dev Vite.                                                                                                                                                                                                            |
+| `packagePath` | `string`                          | Chemin vers le fichier HTML du renderer bundlé, chargé en production.                                                                                                                                                                                                                                                                   |
 
 ## Création de la fenêtre
 
@@ -91,12 +91,12 @@ import { WindowService, windowServiceToken } from "@spinejs/electron";
 
 ### `createMainWindow(windowOptions, devUrl, packagePath)`
 
-Crée la `BrowserWindow` avec les options données, fusionnées avec les dernières bornes persistées (position + taille). Charge :
+Crée la `BrowserWindow` avec les options données, fusionnées avec les dernières bornes persistées (position + taille) et les `webPreferences` sécurisés par défaut (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` — surchargeables option par option). Charge :
 
 - `devUrl` en développement (quand `app.isPackaged === false` et `E2E_LOAD_FILE !== '1'`).
 - `packagePath` en production.
 
-Persiste les bornes de la fenêtre dans `userData/window-state.json` sur les événements `resize` et `move` (debouncé à 300 ms).
+Persiste les bornes de la fenêtre dans `userData/window-state.json` sur les événements `resize` et `move` (debouncé à 300 ms), et force l'écriture d'une sauvegarde en attente à la fermeture de la fenêtre.
 
 ### `getMainWindow()`
 
@@ -167,10 +167,12 @@ export class DeepLinkModule {
 `window-all-closed` n'appelle pas `app.quit()` sous macOS (la convention standard macOS est de garder l'application active dans le Dock jusqu'à ce que l'utilisateur quitte explicitement). L'événement `activate` (clic sur le Dock sans fenêtre ouverte) recrée la fenêtre principale :
 
 ```typescript
-// Inside ElectronModule.createMainWindow():
+// Registered once inside ElectronModule.onInit():
 electronApp.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) this.createMainWindow();
+  if (mainWindowRequested && BrowserWindow.getAllWindows().length === 0) {
+    this.createMainWindow();
+  }
 });
 ```
 
-C'est géré automatiquement — aucune configuration nécessaire.
+C'est géré automatiquement — aucune configuration nécessaire. La fenêtre n'est recréée qu'une fois que votre application a appelé `createMainWindow()` au moins une fois : une application qui garde volontairement sa fenêtre fermée n'est pas surprise par un clic sur le Dock.
