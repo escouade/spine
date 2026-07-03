@@ -27,11 +27,13 @@ export class DispatchPipeline<
   ) {}
 
   /**
-   * Runs the interceptor chain then the core pipeline for one dispatch. Never throws. The transport
+   * Runs the interceptor chain then the core pipeline for one dispatch. Never throws — even when
+   * an interceptor throws around `next()`, the error is mapped to an error envelope, so the
+   * transport always emits the envelope contract (no raw 500 / rejected IPC promise). The transport
    * binds `Target` to its own route type (e.g. `IpcRoute`/`HttpRoute`), so interceptors receive the
    * address-bearing `LoadedRoute`, not just the address-less `DispatchTarget`.
    */
-  dispatch(
+  async dispatch(
     target: Target,
     ctx: Ctx,
     rawInput: unknown
@@ -42,7 +44,11 @@ export class DispatchPipeline<
         interceptor.intercept(target, ctx, rawInput, next),
       run
     );
-    return chain();
+    try {
+      return await chain();
+    } catch (err) {
+      return { ok: false, code: this.errorMapper.toCode(err) };
+    }
   }
 
   /** Core pipeline (guards → validate → invoke → envelope). Never throws. */

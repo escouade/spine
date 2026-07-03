@@ -12,6 +12,23 @@ import type { IpcRoute } from "./electron-ipc.gateway";
 export type IpcLogRedactor = (channel: string, input: unknown) => unknown;
 
 /**
+ * Serialises the logged input without ever throwing: IPC inputs are structured-clone
+ * values, which JSON.stringify rejects (BigInt) or blows up on (circular refs) —
+ * logging must never kill the dispatch.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return (
+      JSON.stringify(value, (_key, v: unknown) =>
+        typeof v === "bigint" ? v.toString() : v
+      ) ?? String(value)
+    );
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+/**
  * Logs every IPC dispatch at debug level: channel + serialised input on the way in,
  * channel + ok/error-code on the way out. Wire via `ElectronIpcGatewayModule.configure()`.
  *
@@ -39,7 +56,7 @@ export class IpcLoggingInterceptor
       ? this.redact(route.address, rawInput)
       : rawInput;
     this.logger.debug(
-      `→ ${route.address} ${JSON.stringify(loggedInput)}`,
+      `→ ${route.address} ${safeStringify(loggedInput)}`,
       IpcLoggingInterceptor.name
     );
     const envelope = await next();

@@ -80,6 +80,38 @@ describe("IpcLoggingInterceptor", () => {
     expect(messages[0]).toContain('{"limit":10}');
   });
 
+  it("survives a circular input instead of killing the dispatch", async () => {
+    const { logger, messages } = captureDebug();
+    const interceptor = new IpcLoggingInterceptor(logger);
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+
+    const envelope = await interceptor.intercept(
+      route("projects:save"),
+      ctx,
+      circular,
+      okEnvelope
+    );
+
+    expect(envelope.ok).toBe(true);
+    expect(messages[0]).toContain("→ projects:save [unserializable]");
+  });
+
+  it("serialises BigInt inputs instead of throwing", async () => {
+    const { logger, messages } = captureDebug();
+    const interceptor = new IpcLoggingInterceptor(logger);
+
+    const envelope = await interceptor.intercept(
+      route("projects:get"),
+      ctx,
+      { id: 42n },
+      okEnvelope
+    );
+
+    expect(envelope.ok).toBe(true);
+    expect(messages[0]).toContain('{"id":"42"}');
+  });
+
   it("logs the outbound error code on failure", async () => {
     const { logger, messages } = captureDebug();
     const interceptor = new IpcLoggingInterceptor(logger);
