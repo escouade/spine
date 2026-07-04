@@ -4752,6 +4752,7 @@ __metadata:
     "@mikro-orm/core": "npm:^6"
     "@spinejs/cls": "workspace:^"
     "@spinejs/core": "workspace:^"
+    "@spinejs/gateway-core": "workspace:^"
   languageName: unknown
   linkType: soft
 
