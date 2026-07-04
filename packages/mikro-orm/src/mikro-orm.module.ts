@@ -7,9 +7,20 @@ import {
   OnStop,
   loggerToken,
 } from "@spinejs/core";
-import { EntityManager, MikroORM, type Options } from "@mikro-orm/core";
+import {
+  EntityManager,
+  EntityRepository,
+  MikroORM,
+  type Options,
+} from "@mikro-orm/core";
 import { ClsModule, ClsService } from "@spinejs/cls";
 import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
+import {
+  entityForRepository,
+  isRepositoryClass,
+  repositoryOf,
+  type RepositoryRegistration,
+} from "./mikro-orm.repository";
 import {
   DEFAULT_RETRY,
   EM,
@@ -32,12 +43,17 @@ const delay = (ms: number): Promise<void> =>
  */
 export const mikroOrmProvider: FactoryProvider<MikroORM> = {
   provide: MikroORM,
-  inject: [ClsService, mikroOrmOptionsToken],
-  factory: (cls: ClsService, options: Options): MikroORM =>
+  inject: [ClsService, mikroOrmOptionsToken, loggerToken],
+  factory: (cls: ClsService, options: Options, log?: Logger): MikroORM =>
     MikroORM.initSync({
       ...options,
       // The load-bearing fact: one AsyncLocalStorage (spine's) backs the request-scoped EntityManager.
       context: () => cls.get(EM) as EntityManager | undefined,
+      // Bridge MikroORM's log output (queries under `debug`, connection events) to the spine logger —
+      // one sink (ADR 0016 §5). A user-supplied `logger` wins; a missing spine logger degrades to a
+      // no-op (never throws), so the module works even before a logger is available.
+      logger:
+        options.logger ?? ((message: string) => log?.debug(message, CONTEXT)),
     }),
 };
 
@@ -150,6 +166,40 @@ export class MikroOrmModule implements OnStart, OnStop {
         MikroOrmInterceptor,
       ],
       exports: [MikroORM, EntityManager, MikroOrmInterceptor],
+    };
+  }
+
+  /**
+   * Exposes a feature module's repositories, each injectable by **class token** (ADR 0016 §3), bound to
+   * the request `EntityManager` (each op delegates to the per-request fork via `getContext()`):
+   * `imports: [MikroOrmModule.register([UserRepository])]`, then `inject: [UserRepository]`.
+   *
+   * An entry is either a **custom repository class** (a `EntityRepository<Entity>` subclass — its entity
+   * is read back from the `EntitySchema`'s `repository: () => …` link) or an **entity class** (exposes
+   * the default `EntityRepository` under `repositoryOf(Entity)`). Merges into the single
+   * `MikroOrmModule` node, so `configure()` (the connection) and every `register()` share one instance.
+   */
+  static register(items: RepositoryRegistration[]): DynamicModule {
+    const providers = items.map(
+      (item): FactoryProvider<EntityRepository<object>> =>
+        isRepositoryClass(item)
+          ? {
+              provide: item,
+              inject: [MikroORM],
+              factory: (orm: MikroORM) =>
+                orm.em.getRepository(entityForRepository(orm, item)),
+            }
+          : {
+              provide: repositoryOf(item),
+              inject: [MikroORM],
+              factory: (orm: MikroORM) => orm.em.getRepository(item),
+            }
+    );
+
+    return {
+      module: MikroOrmModule,
+      providers,
+      exports: providers.map((p) => p.provide),
     };
   }
 }

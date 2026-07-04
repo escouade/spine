@@ -8,6 +8,11 @@ export {
   connectWithRetry,
 } from "./mikro-orm.module";
 export { MikroOrmInterceptor } from "./mikro-orm.interceptor";
+export { repositoryOf } from "./mikro-orm.repository";
+export type {
+  RepositoryRegistration,
+  EntityRepositoryClass,
+} from "./mikro-orm.repository";
 export { DEFAULT_RETRY } from "./mikro-orm.options";
 export type { MikroOrmModuleOptions, RetryPolicy } from "./mikro-orm.options";
 
