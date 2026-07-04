@@ -11,3 +11,6 @@ _bmad/
 
 # Env
 .env
+
+# yarn pack output (release publish loop)
+*.tgz

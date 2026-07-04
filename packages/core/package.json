@@ -24,7 +24,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "prepack": "node ../../scripts/ensure-yarn-pack.cjs"
   },
   "publishConfig": {
     "access": "public",

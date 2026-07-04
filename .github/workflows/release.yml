@@ -76,27 +76,34 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      # The publish step selects by --no-private while build/version select by
-      # the `publishable` nx tag — enforce that the two sets stay identical.
-      - name: Verify publishable tag matches non-private workspaces
+      # Three selectors decide what ships: the `publishable` nx tag (build/version),
+      # --no-private (publish), and the root `workspaces` list (yarn only iterates
+      # registered workspaces). Enforce that all three agree.
+      - name: Verify publishable tag matches non-private registered workspaces
         run: |
           node -e '
           const fs = require("fs");
-          const bad = [];
+          const ws = JSON.parse(fs.readFileSync("package.json", "utf8")).workspaces || [];
+          const bad = [], unregistered = [];
           for (const d of fs.readdirSync("packages")) {
             const mj = `packages/${d}/package.json`, pj = `packages/${d}/project.json`;
             if (!fs.existsSync(mj)) continue;
             const tagged = fs.existsSync(pj) && (JSON.parse(fs.readFileSync(pj, "utf8")).tags || []).includes("publishable");
             const priv = !!JSON.parse(fs.readFileSync(mj, "utf8")).private;
             if (tagged === priv) bad.push(d);
+            if (tagged && !ws.includes(`packages/${d}`)) unregistered.push(d);
           }
-          if (bad.length) { console.error("publishable tag / private field mismatch:", bad.join(", ")); process.exit(1); }'
+          if (bad.length) console.error("publishable tag / private field mismatch:", bad.join(", "));
+          if (unregistered.length) console.error("publishable but missing from root workspaces (yarn would silently skip publish):", unregistered.join(", "));
+          if (bad.length || unregistered.length) process.exit(1);'
+
+      # Gate before the (slower) build: none of these targets needs dist,
+      # dev resolution goes through src.
+      - name: Lint, typecheck, test
+        run: yarn nx run-many -t lint typecheck test
 
       - name: Build packages
         run: yarn nx run-many -t build --projects=tag:publishable
-
-      - name: Lint, typecheck, test
-        run: yarn nx run-many -t lint typecheck test
 
       - name: Configure git identity
         run: |
@@ -119,9 +126,11 @@ jobs:
           YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
 
       # OIDC trusted publishing needs the npm CLI >= 11.5.1; Node 20 ships npm 10.
+      # Pinned to ^11: a future npm major may drop Node 20 (EBADENGINE) and would
+      # brick both releases and publish_only recovery.
       - name: Upgrade npm (OIDC support)
         if: ${{ !inputs.dry_run }}
-        run: npm install -g npm@latest
+        run: npm install -g 'npm@^11.5.1'
 
       # No token: `id-token: write` lets the npm CLI exchange a GitHub OIDC token
       # for a short-lived npm session. Provenance is generated automatically.

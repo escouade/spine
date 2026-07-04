@@ -34,7 +34,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "prepack": "node ../../scripts/ensure-yarn-pack.cjs"
   },
   "publishConfig": {
     "access": "public",
@@ -66,8 +67,8 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.0.6",
-    "@spinejs/core": "workspace:*",
-    "@spinejs/gateway-core": "workspace:*",
+    "@spinejs/core": "workspace:^",
+    "@spinejs/gateway-core": "workspace:^",
     "hono": "^4.12.27",
     "zod": "^3.25.76"
   }
