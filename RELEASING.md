@@ -44,11 +44,12 @@ Publisher → GitHub Actions_, then:
 
 From then on, run the **Release** workflow (_Actions → Release → Run workflow_):
 
-| Input           | Value                                                    |
-| --------------- | -------------------------------------------------------- |
-| `specifier`     | `0.2.0` (explicit) or a bump keyword `patch`/`minor`     |
-| `first_release` | **true** only for the very first tagged release          |
-| `dry_run`       | `true` to preview version + changelog without publishing |
+| Input           | Value                                                                     |
+| --------------- | ------------------------------------------------------------------------- |
+| `specifier`     | `0.2.0` (explicit) or a bump keyword `patch`/`minor`                      |
+| `first_release` | **true** only for the very first tagged release                           |
+| `dry_run`       | `true` to preview version + changelog without publishing                  |
+| `publish_only`  | **recovery** — skip version/tag, rebuild + publish HEAD as-is (see below) |
 
 The workflow:
 
@@ -64,6 +65,15 @@ The workflow:
 > `workspace:` protocol and `publishConfig` overrides), but only the **npm CLI**
 > (≥ 11.5.1) speaks npm's OIDC handshake — yarn Berry's OIDC path is
 > undocumented and broken. So yarn builds the tarball, npm uploads it.
+
+### Recovery: publish failed after the tag was pushed
+
+If the publish step fails **after** `nx release` already pushed the version
+commit + tag (npm outage, OIDC hiccup), re-running the workflow normally would
+abort on the existing tag. Instead, re-run it with `publish_only: true`: the
+version/tag step is skipped and the packages are rebuilt and published from the
+already-bumped `main` HEAD. Packages already on npm are detected (`npm view`)
+and skipped, so only the missing ones are published.
 
 ## Prerequisites
 
