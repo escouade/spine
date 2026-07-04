@@ -11,9 +11,9 @@
   [ADR 0008](0008-explicit-injection-no-reflect-metadata.md) (explicit typed `inject:`, no
   `reflect-metadata`). Connection lifecycle uses the module hooks of
   [ADR 0010](0010-atomic-module-lifecycle.md).
-- **Evidence**: engine comparison in [orm-mikro-vs-typeorm-bench.md](../plans/orm-mikro-vs-typeorm-bench.md)
-  (weighted 75 vs 56); the load-bearing mechanism is proven by a runnable spike,
-  `packages/mikro-orm/src/spike.spec.ts` (4/4).
+- **Evidence**: MikroORM was chosen over TypeORM on a weighted engine comparison (75 vs 56 — the
+  scorecard is summarised under _Context_ and _Alternatives_ below); the load-bearing mechanism is
+  proven by a runnable spike, `packages/mikro-orm/src/spike.spec.ts` (4/4).
 
 ## Context
 
@@ -31,7 +31,7 @@ stakes; this is the differentiator.
 
 That capability decides the engine. Two decorator-based TypeScript ORMs were evaluated against
 spine's actual constraints (typed `inject:` arrays, no `reflect-metadata`, no param decorators, CLS
-for request scope, module-owned lifecycle) — full scorecard in the bench:
+for request scope, module-owned lifecycle) — the comparison:
 
 - **TypeORM** has **no identity map and no unit-of-work**; its `EntityManager` is stateless. The
   differentiator would be hand-built (a `QueryRunner` threaded through CLS, an explicit `.save()` at
