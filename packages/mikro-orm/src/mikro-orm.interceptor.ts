@@ -1,4 +1,4 @@
-import { Injectable } from "@spinejs/core";
+import { Injectable, Logger, loggerToken } from "@spinejs/core";
 import { MikroORM } from "@mikro-orm/core";
 import { ClsService } from "@spinejs/cls";
 import type {
@@ -8,6 +8,9 @@ import type {
   GatewayInterceptor,
 } from "@spinejs/gateway-core";
 import { EM } from "./mikro-orm.options";
+
+/** Log context tag for the interceptor's diagnostics. */
+const CONTEXT = "MikroOrmInterceptor";
 
 /**
  * The differentiator (ADR 0016 §2). A gateway interceptor that gives every dispatch its own
@@ -27,13 +30,15 @@ import { EM } from "./mikro-orm.options";
  * and a failing flush propagates to the gateway's error path — never swallowed.
  *
  * Must run **inside** the CLS scope opened by `ClsInterceptor` (ADR 0003): register it in the gateway
- * `configure({ interceptors })` **after** `ClsInterceptor`. Without an active scope, `cls.set()` throws.
+ * `configure({ interceptors })` **after** `ClsInterceptor`. Without an active scope it fails fast with a
+ * clear, logged diagnostic naming the wiring fix (not an opaque store-write error mapped to a code).
  */
-@Injectable({ inject: [MikroORM, ClsService] })
+@Injectable({ inject: [MikroORM, ClsService, loggerToken] })
 export class MikroOrmInterceptor implements GatewayInterceptor {
   constructor(
     private readonly orm: MikroORM,
-    private readonly cls: ClsService
+    private readonly cls: ClsService,
+    private readonly log: Logger
   ) {}
 
   async intercept(
@@ -42,6 +47,18 @@ export class MikroOrmInterceptor implements GatewayInterceptor {
     _rawInput: unknown,
     next: () => Promise<Envelope<unknown>>
   ): Promise<Envelope<unknown>> {
+    // Fail fast with an actionable diagnostic when the interceptor runs outside a CLS scope — the
+    // wiring mistake (missing or misordered ClsInterceptor). Otherwise `cls.set()` throws an opaque
+    // store-write error the pipeline maps to a generic code, hiding the real cause (ADR 0016 §5).
+    if (!this.cls.active) {
+      const message =
+        "@spinejs/mikro-orm: MikroOrmInterceptor ran without an active CLS scope. Register it AFTER " +
+        "ClsInterceptor — configure({ interceptors: [ClsInterceptor, MikroOrmInterceptor] }) — so it " +
+        "runs inside the request scope.";
+      this.log.error(message, CONTEXT);
+      throw new Error(message);
+    }
+
     // `orm.em` is always the ROOT manager; `.fork()` yields a fresh per-request manager. Storing it in
     // CLS makes `orm.em`'s operations delegate to it through the `context` hook (ADR 0016 §1-2).
     const em = this.orm.em.fork();

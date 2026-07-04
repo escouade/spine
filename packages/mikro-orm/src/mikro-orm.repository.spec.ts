@@ -10,6 +10,17 @@ import type {
 import { MikroOrmModule, MikroOrmInterceptor, repositoryOf } from "./index";
 import { mikroOrmProvider } from "./mikro-orm.module";
 import { entityForRepository } from "./mikro-orm.repository";
+import type { Logger } from "@spinejs/core";
+
+const silentLogger = {
+  info() {},
+  error() {},
+  warn() {},
+  debug() {},
+  verbose() {},
+  fatal() {},
+  exit: async () => {},
+} as unknown as Logger;
 
 // --- Entities via EntitySchema; User declares its custom repository (the MikroORM-native link) -----
 class User {
@@ -99,7 +110,7 @@ describe("MikroOrmModule.register + repositoryOf (Story 1.4)", () => {
     await orm.connect();
     await orm.schema.createSchema();
     clsInterceptor = new ClsInterceptor(cls);
-    mikro = new MikroOrmInterceptor(orm, cls);
+    mikro = new MikroOrmInterceptor(orm, cls, silentLogger);
 
     // Build the real providers produced by register(), then run their factories to obtain the repos.
     const dyn = MikroOrmModule.register([UserRepository, Product]);

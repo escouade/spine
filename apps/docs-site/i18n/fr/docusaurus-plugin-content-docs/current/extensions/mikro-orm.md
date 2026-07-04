@@ -408,6 +408,23 @@ dans la factory `interceptors` du transport exactement comme le `MikroOrmInterce
 ci-dessus. Le module est le chemin pratique ; cette factory est l'échappatoire et la transparence —
 rien de `configure()` n'est caché.
 
+## Limitations
+
+- **Une seule connexion par app.** `MikroOrmModule.configure()` possède une unique connexion MikroORM
+  pour toute l'app — l'importer (ou appeler `configure()`) plusieurs fois résout la **même** instance.
+  Un second `configure({...})` avec des options _différentes_ est ignoré en silence (les premières
+  options gagnent) ; ce package ne modélise pas plusieurs bases simultanées. Un seul `configure()` à la
+  racine de l'app.
+- **Épinglez `@mikro-orm/core` et son driver sur le même major.** La résolution des repositories repose
+  sur `instanceof EntityRepository` et une table de tokens par entité, toutes deux sensibles à
+  l'identité. Une copie **dupliquée** de `@mikro-orm/core` dans l'arbre (un driver sur un autre major,
+  un écart de version) crée une seconde classe `EntityRepository` et casse `register([...])`. Gardez
+  `@mikro-orm/core` et le driver `@mikro-orm/*` sur un seul major (v6 aujourd'hui) — une seule copie
+  dans l'arbre de dépendances.
+- **L'interceptor exige une portée CLS active.** Enregistrez `MikroOrmInterceptor` **après**
+  `ClsInterceptor` (voir _Câbler l'interceptor transactionnel_ plus haut). Hors d'une portée, il échoue
+  immédiatement avec un diagnostic explicite nommant le correctif, plutôt qu'une erreur opaque.
+
 ## Référence
 
 ### `MikroOrmModule.configure(options)`

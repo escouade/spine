@@ -10,6 +10,17 @@ import type {
 import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
 import { mikroOrmProvider, entityManagerProvider } from "./mikro-orm.module";
 import { EM } from "./mikro-orm.options";
+import type { Logger } from "@spinejs/core";
+
+const silentLogger = {
+  info() {},
+  error() {},
+  warn() {},
+  debug() {},
+  verbose() {},
+  fatal() {},
+  exit: async () => {},
+} as unknown as Logger;
 
 // --- Entity via EntitySchema (no decorators, ADR 0016 NFR1) --------------------------------------
 class Widget {
@@ -77,7 +88,7 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
     await orm.connect();
     await orm.schema.createSchema();
     clsInterceptor = new ClsInterceptor(cls);
-    mikro = new MikroOrmInterceptor(orm, cls);
+    mikro = new MikroOrmInterceptor(orm, cls, silentLogger);
     svc = new WidgetService(entityManagerProvider.factory(orm));
   });
 
@@ -156,12 +167,21 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
     expect(inTx).toBe(false); // no up-front begin(): a read-only dispatch never opens a transaction
   });
 
-  it("must run inside a CLS scope — throws if used without ClsInterceptor", async () => {
+  it("fails fast with a clear, logged diagnostic when run outside a CLS scope", async () => {
+    const errors: string[] = [];
+    const recLogger = {
+      ...silentLogger,
+      error: (m: unknown) => errors.push(String(m)),
+    } as unknown as Logger;
+    const bare = new MikroOrmInterceptor(orm, cls, recLogger);
+
     await expect(
-      mikro.intercept(target, ctx, undefined, async () => ({
+      bare.intercept(target, ctx, undefined, async () => ({
         ok: true,
         data: undefined,
       }))
-    ).rejects.toThrow(/active scope/);
+    ).rejects.toThrow(/active CLS scope/);
+    // The actionable message is surfaced (logged), not swallowed into a generic pipeline code.
+    expect(errors.some((m) => /ClsInterceptor/.test(m))).toBe(true);
   });
 });

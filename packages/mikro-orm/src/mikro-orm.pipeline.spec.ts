@@ -11,6 +11,17 @@ import type {
 } from "@spinejs/gateway-core";
 import { MikroOrmInterceptor } from "./index";
 import { mikroOrmProvider } from "./mikro-orm.module";
+import type { Logger } from "@spinejs/core";
+
+const silentLogger = {
+  info() {},
+  error() {},
+  warn() {},
+  debug() {},
+  verbose() {},
+  fatal() {},
+  exit: async () => {},
+} as unknown as Logger;
 
 // Regression guard for BUG 1: the DispatchPipeline NEVER throws — a handler that throws comes back as
 // `{ ok: false }`, so `next()` RESOLVES with an error envelope. The interceptor must roll back on that
@@ -71,7 +82,7 @@ describe("MikroOrmInterceptor through the real DispatchPipeline (BUG 1 regressio
     pipeline = new DispatchPipeline<GatewayContext>(
       passthroughValidator,
       messageErrorMapper,
-      [new ClsInterceptor(cls), new MikroOrmInterceptor(orm, cls)]
+      [new ClsInterceptor(cls), new MikroOrmInterceptor(orm, cls, silentLogger)]
     );
   });
 
