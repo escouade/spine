@@ -79,9 +79,13 @@ and skipped, so only the missing ones are published.
 
 ## Prerequisites
 
-- **Branch protection** — the release job pushes the version commit and tag to
-  `main`. If `main` is protected, allow `github-actions[bot]` to bypass the push
-  restriction (or run the workflow from an unprotected release branch).
+- **`RELEASE_TOKEN` secret** — `main` is protected (required PR), so the default
+  `GITHUB_TOKEN` cannot push the version commit + tag. Add a repo secret
+  `RELEASE_TOKEN`: a fine-grained PAT owned by a repo **admin**, scoped to this
+  repo with **Contents: Read and write**. The `checkout` step uses it, and since
+  branch protection has `enforce_admins` off, an admin push bypasses the
+  required-PR rule. (Publishing itself stays tokenless via OIDC — this token is
+  only for the git push.)
 - No npm secret in the repo (OIDC replaces it).
 
 ## Local dry-run
