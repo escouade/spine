@@ -7,7 +7,7 @@ export type {
   HttpRaw,
 } from "./http-base.types";
 export { HttpGatewayModule } from "./http-gateway.module";
-export { get, post, put, patch, del, httpRoutes } from "./http-routes";
+export { get, post, put, patch, del, sse, httpRoutes } from "./http-routes";
 export type {
   HttpContextRegistry,
   DefaultCtx,
@@ -17,7 +17,11 @@ export type {
   RouteHelper,
   RouteOptions,
   InputOf,
+  SseRouteFn,
+  SseRouteOptions,
 } from "./http-routes";
+export { SseHub } from "./sse-hub";
+export type { SseEvent, SseHubOptions } from "./sse-hub";
 export { ZodValidator } from "./zod.validator";
 export { DefaultHttpErrorMapper } from "./default-error.mapper";
 export type { HttpErrorCode } from "./default-error.mapper";
