@@ -466,26 +466,29 @@ studio ADR 0017 **Accepted / NestJS** until WI-D forces a real re-bench.
 
 ### 6.1 SSE API surface (`@spinejs/http-gateway`)
 
-| Symbol                     | Shape                                                                      |
-| -------------------------- | -------------------------------------------------------------------------- |
-| `sse(path, opts, handler)` | `handler: (input, ctx) => AsyncIterable<SseEvent>` → `RouteMarker`         |
-| `SseEvent`                 | `{ data: unknown; event?: string; id?: string; retry?: number }`           |
-| `SseHub<K, E>`             | `subscribe(key): AsyncIterable<SseEvent>` · `publish(key, ev)` · `close()` |
-| HTTP meta                  | `HttpRouteMeta` gains `sse?: true`                                         |
-| gateway-core (pure add)    | `runGuards(target, ctx): Promise<void>` (shared by buffered + SSE paths)   |
-| Config                     | `heartbeatMs` (default 15_000), backpressure policy (bounded/drop-oldest)  |
+| Symbol                     | Shape                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `sse(path, opts, handler)` | `handler: (input, ctx) => AsyncIterable<SseEvent>` → `RouteMarker`                                     |
+| `SseEvent`                 | `{ data: unknown; event?: string; id?: string; retry?: number }`                                       |
+| `SseHub<K = string>`       | `subscribe(key): AsyncIterable<SseEvent>` · `publish(key, ev)` · `subscriberCount(key)` · `close()`    |
+| `SseHubOptions`            | `{ maxQueuePerSubscriber?: number }` — backpressure bound (default 1000, drop-oldest)                  |
+| HTTP meta                  | `HttpRouteMeta` gains `sse?: boolean`                                                                  |
+| Config                     | `HttpGatewayModule.configure({ sseHeartbeatMs })` — keep-alive interval (default 15_000, `0` disables) |
+
+Guards run **inline** in the SSE path from the `LoadedRoute`'s already-resolved guard instances —
+`gateway-core` is not modified (see §3.2 / §3.3).
 
 ### 6.2 Scheduler API surface (`@spinejs/scheduler`)
 
-| Symbol                         | Shape                                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------- |
-| `SchedulerModule.configure(o)` | `o: { tasks: ScheduledTask[] }` → `DynamicModule` (`imports:[ClsModule]`)             |
-| `ScheduledTask`                | `{ name; everyMs; inject?; run(...deps); overlap?: 'skip'\|'queue'; seed?; around? }` |
-| `around` hook                  | `(next: () => Promise<void>) => () => Promise<void>` (UoW, tracing, …)                |
-| `mikroOrmUnitOfWork`           | `around` hook exported by `@spinejs/mikro-orm` (fork EM into CLS + begin/commit)      |
-| Lifecycle                      | `onStart` arms timers · `onStop` clears + drains in-flight (≤ `shutdownTimeout`)      |
+| Symbol                         | Shape                                                                                                                                                     |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SchedulerModule.configure(o)` | `o: { tasks: ScheduledTask[]; imports?: ModuleEntry[] }` → `DynamicModule` (imports `ClsModule` + `imports`)                                              |
+| `ScheduledTask`                | `{ name; everyMs; inject?; run(...deps); overlap?: 'skip'\|'queue'; seed?; around? }`                                                                     |
+| `around` hook                  | `(next: () => Promise<void>) => () => Promise<void>` (UoW, tracing, …)                                                                                    |
+| `mikroOrmUnitOfWork`           | an `around` hook shipped by the **separate** `@spinejs/mikro-orm` battery (forks the EM into CLS + begin/commit); the scheduler has **no** ORM dependency |
+| Lifecycle                      | `onStart` arms timers · `onStop` clears + drains in-flight (≤ app `shutdownTimeout`)                                                                      |
 
-### 6.3 Package layout (mirrors `@spinejs/mikro-orm`)
+### 6.3 Package layout (mirrors the `@spinejs/cls` package)
 
 ```
 packages/scheduler/

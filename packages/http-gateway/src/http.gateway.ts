@@ -105,12 +105,17 @@ export class HttpGateway<
       const input = route.input
         ? this.validator.validate(route.input, rawInput)
         : rawInput;
-      const events = (await route.invoke(
-        ctx,
-        input
-      )) as AsyncIterable<SseEvent>;
+      const result = await route.invoke(ctx, input);
+      if (!isAsyncIterable(result)) {
+        throw new Error("SSE handler must return an AsyncIterable<SseEvent>");
+      }
+      const meta = route.meta as HttpRouteMeta | undefined;
+      if (meta?.headers) {
+        for (const [key, val] of Object.entries(meta.headers))
+          c.header(key, val);
+      }
       return streamSSE(c, (stream) =>
-        pumpSse(stream, events, this.sseHeartbeatMs)
+        pumpSse(stream, result, this.sseHeartbeatMs)
       );
     } catch (err) {
       const code = this.errorMapper.toCode(err);
@@ -152,30 +157,60 @@ async function pumpSse(
   heartbeatMs: number
 ): Promise<void> {
   const iterator = events[Symbol.asyncIterator]();
+  // The client may already be gone before we register `onAbort` — bail without leaking the subscription.
+  if (stream.aborted) {
+    await iterator.return?.()?.catch(() => {});
+    return;
+  }
   const heartbeat =
     heartbeatMs > 0
-      ? setInterval(() => void stream.write(": ping\n\n"), heartbeatMs)
+      ? setInterval(() => {
+          // Fire-and-forget, but swallow the rejection when the stream is already closed.
+          void stream.write(": ping\n\n").catch(() => {});
+        }, heartbeatMs)
       : undefined;
   heartbeat?.unref?.(); // never let the keep-alive timer keep the process alive on its own
-  stream.onAbort(() => void iterator.return?.());
+  stream.onAbort(() => void iterator.return?.()?.catch(() => {}));
   try {
     for (;;) {
       const { value, done } = await iterator.next();
       if (done || stream.aborted) break;
-      await stream.writeSSE({
-        data:
-          typeof value.data === "string"
-            ? value.data
-            : JSON.stringify(value.data),
-        event: value.event,
-        id: value.id,
-        retry: value.retry,
-      });
+      try {
+        await stream.writeSSE({
+          data: serializeSseData(value.data),
+          event: value.event,
+          id: value.id,
+          retry: value.retry,
+        });
+      } catch {
+        // A single malformed event (unserializable data, a newline in `event`/`id`, an
+        // already-closed stream) must not tear the connection down — skip it and keep streaming.
+      }
     }
   } finally {
     if (heartbeat) clearInterval(heartbeat);
-    await iterator.return?.();
+    await iterator.return?.()?.catch(() => {});
   }
+}
+
+/** Serialize an event's `data` to a string, never throwing (BigInt / circular / `undefined` → `"null"`). */
+function serializeSseData(data: unknown): string {
+  if (typeof data === "string") return data;
+  try {
+    return JSON.stringify(data) ?? "null";
+  } catch {
+    return "null";
+  }
+}
+
+/** Structural async-iterable check — an SSE handler must return an `AsyncIterable<SseEvent>`. */
+function isAsyncIterable(value: unknown): value is AsyncIterable<SseEvent> {
+  return (
+    value != null &&
+    typeof (value as { [Symbol.asyncIterator]?: unknown })[
+      Symbol.asyncIterator
+    ] === "function"
+  );
 }
 
 const defaultStatusMap: Record<string, number> = {

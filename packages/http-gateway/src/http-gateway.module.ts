@@ -34,6 +34,9 @@ const statusMapperToken = new InjectionToken<
   ((code: string) => number) | undefined
 >("http-gateway.status-mapper");
 const portToken = new InjectionToken<number | undefined>("http-gateway.port");
+const sseHeartbeatToken = new InjectionToken<number | undefined>(
+  "http-gateway.sse-heartbeat"
+);
 
 /**
  * Gateway transport module for the HTTP binding (Hono). The base `@Module` registers the
@@ -46,6 +49,7 @@ const portToken = new InjectionToken<number | undefined>("http-gateway.port");
     { provide: interceptorsToken, value: [] },
     { provide: statusMapperToken, value: undefined },
     { provide: portToken, value: undefined },
+    { provide: sseHeartbeatToken, value: undefined },
     {
       provide: HttpGateway,
       inject: [
@@ -54,20 +58,23 @@ const portToken = new InjectionToken<number | undefined>("http-gateway.port");
         contextFactoryToken,
         interceptorsToken,
         statusMapperToken,
+        sseHeartbeatToken,
       ],
       factory: (
         validator: Validator,
         errorMapper: ErrorMapper<string>,
         contextFactory: ContextFactory<HttpRaw, HttpBaseContext>,
         interceptors: GatewayInterceptor<HttpBaseContext, string, HttpRoute>[],
-        statusMapper: ((code: string) => number) | undefined
+        statusMapper: ((code: string) => number) | undefined,
+        sseHeartbeatMs: number | undefined
       ) =>
         new HttpGateway(
           validator,
           errorMapper,
           contextFactory,
           interceptors,
-          statusMapper
+          statusMapper,
+          sseHeartbeatMs
         ),
     },
   ],
@@ -113,6 +120,8 @@ export class HttpGatewayModule implements OnStart, OnStop {
     /** Maps an `ErrorMapper` code to an HTTP status. Defaults to the built-in BAD_REQUEST/UNAUTHORIZED/INTERNAL_ERROR mapping. */
     statusMapper?: ProviderAdapter<(code: string) => number>;
     port?: number;
+    /** Interval (ms) between SSE keep-alive comments on a stream; `0` disables. Default 15_000. */
+    sseHeartbeatMs?: number;
   }): DynamicModule {
     if (!options.gateway && !options.contextFactory) {
       throw new Error(
@@ -137,6 +146,7 @@ export class HttpGatewayModule implements OnStart, OnStop {
           options.statusMapper ?? { value: undefined }
         ),
         toProvider(portToken, { value: options.port }),
+        toProvider(sseHeartbeatToken, { value: options.sseHeartbeatMs }),
         // `provide()` upserts by token, so an explicit gateway replaces the base factory below.
         ...(options.contextFactory
           ? [toProvider(contextFactoryToken, options.contextFactory)]
