@@ -112,12 +112,13 @@ jobs:
 
       - name: Version, changelog, tag
         if: ${{ !inputs.publish_only }}
+        # No --yes: it is mutually exclusive with --skip-publish (which already
+        # auto-answers "no" to the only prompt — the publish confirmation).
         run: >-
           yarn nx release "$SPECIFIER"
           --skip-publish
           ${{ inputs.first_release && '--first-release' || '' }}
           ${{ inputs.dry_run && '--dry-run' || '' }}
-          --yes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SPECIFIER: ${{ inputs.specifier }}
