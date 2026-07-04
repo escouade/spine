@@ -61,6 +61,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history so the changelog can diff against tags
+          # nx release pushes the version commit + tag to protected `main`.
+          # The default GITHUB_TOKEN (github-actions[bot]) is blocked by the
+          # required-PR rule; RELEASE_TOKEN is an admin fine-grained PAT
+          # (Contents: RW) that bypasses it (branch protection has
+          # enforce_admins off). persist-credentials keeps it for the push.
+          token: ${{ secrets.RELEASE_TOKEN }}
+          persist-credentials: true
 
       - uses: actions/setup-node@v4
         with:
