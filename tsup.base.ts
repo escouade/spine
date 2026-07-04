@@ -8,17 +8,28 @@ import type { Options } from "tsup";
  * resolve to the consumer's installed copy, not inlined into the bundle.
  */
 export function tsupConfig(overrides: Options = {}): Options {
+  const { external = [], ...rest } = overrides;
   return {
     entry: ["src/index.ts"],
     format: ["esm", "cjs"],
-    // Neutralize tsconfig `paths` for the .d.ts build: workspace deps
-    // (`@spinejs/*`) must resolve to their built types in node_modules and be
-    // kept as external imports, not pulled in from source (which sits outside
-    // this package's rootDir and would trip TS6059).
-    dts: { compilerOptions: { paths: {} } },
+    // For the .d.ts pass, resolve workspace deps to their already-built
+    // `dist/*.d.ts` (deps build first via nx `^build`) instead of the on-disk
+    // `types: ./src/index.ts` dev shape. Following a dep into its source pulls
+    // it outside this package's rootDir (TS6059) and trips rollup-plugin-dts.
+    dts: {
+      compilerOptions: {
+        paths: { "@spinejs/*": ["packages/*/dist/index.d.ts"] },
+      },
+    },
     sourcemap: true,
     clean: true,
     treeshake: true,
-    ...overrides,
+    // Keep every @spinejs/* dependency external — referenced by import, never
+    // inlined — in both the JS bundle and the .d.ts.
+    external: [
+      /^@spinejs\//,
+      ...(Array.isArray(external) ? external : [external]),
+    ],
+    ...rest,
   };
 }
