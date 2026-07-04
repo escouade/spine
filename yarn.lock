@@ -4656,6 +4656,21 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@spinejs-examples/mikro-orm-request-uow@workspace:examples/mikro-orm-request-uow":
+  version: 0.0.0-use.local
+  resolution: "@spinejs-examples/mikro-orm-request-uow@workspace:examples/mikro-orm-request-uow"
+  dependencies:
+    "@mikro-orm/better-sqlite": "npm:^6"
+    "@mikro-orm/core": "npm:^6"
+    "@spinejs/cls": "workspace:*"
+    "@spinejs/core": "workspace:*"
+    "@spinejs/electron-ipc-gateway": "workspace:*"
+    "@spinejs/gateway-core": "workspace:*"
+    "@spinejs/mikro-orm": "workspace:*"
+    zod: "npm:^3.25.76"
+  languageName: unknown
+  linkType: soft
+
 "@spinejs/cls@workspace:*, @spinejs/cls@workspace:^, @spinejs/cls@workspace:packages/cls":
   version: 0.0.0-use.local
   resolution: "@spinejs/cls@workspace:packages/cls"
@@ -4744,7 +4759,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@spinejs/mikro-orm@workspace:packages/mikro-orm":
+"@spinejs/mikro-orm@workspace:*, @spinejs/mikro-orm@workspace:packages/mikro-orm":
   version: 0.0.0-use.local
   resolution: "@spinejs/mikro-orm@workspace:packages/mikro-orm"
   dependencies:

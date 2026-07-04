@@ -15,7 +15,8 @@
     "packages/http-gateway",
     "apps/docs-site",
     "examples/cls-request-context",
-    "examples/http-routes"
+    "examples/http-routes",
+    "examples/mikro-orm-request-uow"
   ],
   "scripts": {
     "docs-site:dev": "nx run docs-site:dev",
