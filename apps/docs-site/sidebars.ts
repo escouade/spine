@@ -25,6 +25,7 @@ const sidebars: SidebarsConfig = {
         "gateway/validation",
         "gateway/guards",
         "gateway/interceptors",
+        "gateway/sse",
       ],
     },
     {
@@ -44,6 +45,7 @@ const sidebars: SidebarsConfig = {
         "extensions/config",
         "extensions/winston-logger",
         "extensions/cls",
+        "extensions/scheduler",
       ],
     },
   ],

@@ -105,6 +105,26 @@ The gateway does not wrap CORS/logging/etc. — mount [Hono middleware](https://
 
 Pass a pre-built gateway via `configure({ gateway })` and drive Hono's `app.request()` — no socket, no `listen()`.
 
+## Server-Sent Events
+
+`sse()` declares a streaming `GET` (a peer of `get`/`post`) whose callback returns an `AsyncIterable<SseEvent>`; `SseHub` fans one event out to every open connection for a key. An SSE route reuses the route's guards + input validation but bypasses the envelope, the interceptor chain, and the per-request CLS scope (a long-lived stream must not hold scoped resources).
+
+```typescript
+import { sse, SseHub } from "@spinejs/http-gateway";
+
+@Controller({ inject: [JobsHub] })
+export class JobsController {
+  constructor(private readonly jobs: JobsHub) {}
+  stream = sse("/jobs/stream", {}, (_input, ctx) =>
+    this.jobs.subscribe(ctx.user)
+  );
+}
+
+// server side: hub.publish(userId, { event: "job.updated", data: state })
+```
+
+Backpressure is bounded per subscriber (`maxQueuePerSubscriber`, default 1000, drop-oldest); a `: ping` heartbeat (`configure({ sseHeartbeatMs })`, default 15_000) keeps idle connections alive. See [SSE docs](../../apps/docs-site/docs/gateway/sse.md).
+
 ## Reference
 
 ### `HttpGatewayModule.configure()` — key options
@@ -116,9 +136,10 @@ Pass a pre-built gateway via `configure({ gateway })` and drive Hono's `app.requ
 | `validator`      | No       | `ZodValidator`           | Validates the structured input.                                                            |
 | `statusMapper`   | No       | common codes → statuses  | Maps an error code to an HTTP status.                                                      |
 | `port`           | No       | `undefined`              | When set, `onStart()` calls `gateway.listen(port)`.                                        |
+| `sseHeartbeatMs` | No       | `15_000`                 | Keep-alive `: ping` interval for SSE streams (`0` disables).                               |
 | `gateway`        | No       | built from adapters      | A pre-built `HttpGateway` (for middleware/tests). \*Then `contextFactory` is not required. |
 
-Exports: `HttpGateway`, `HttpGatewayModule`, the route helpers `get`/`post`/`put`/`patch`/`del` (and the deprecated `httpRoutes` factory), `httpFeature`, `HttpModule`, `ZodValidator`, `DefaultHttpErrorMapper`, and the `HttpBaseContext` / `HttpRaw` / `HttpContextRegistry` / `DefaultCtx` types.
+Exports: `HttpGateway`, `HttpGatewayModule`, the route helpers `get`/`post`/`put`/`patch`/`del`/`sse` (and the deprecated `httpRoutes` factory), `SseHub`, `httpFeature`, `HttpModule`, `ZodValidator`, `DefaultHttpErrorMapper`, and the `HttpBaseContext` / `HttpRaw` / `HttpContextRegistry` / `DefaultCtx` / `SseEvent` / `SseHubOptions` / `SseRouteOptions` types.
 
 ## Full docs
 
