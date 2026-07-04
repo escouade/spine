@@ -114,6 +114,12 @@ interceptors: {
 - **`MikroOrmInterceptor`** — forks a per-request `EntityManager` into CLS and `flush()`es it once at request end on a successful envelope (no up-front `begin()`; a request that wrote nothing opens no transaction).
 - Re-exports `MikroORM`, `EntityManager`, `EntitySchema`, `EntityRepository`, and the `Options` type from `@mikro-orm/core`; plus `mikroOrmProvider` / `entityManagerProvider` / `connectWithRetry` for hand-wiring.
 
+## Limitations
+
+- **One connection per app** — `configure()` is single-connection by design; a second `configure()` with different options is silently ignored (no multi-database).
+- **Pin `@mikro-orm/core` + driver to one major** (v6 today) — a duplicated core copy breaks repository resolution (`instanceof` / token identity).
+- **`MikroOrmInterceptor` needs an active CLS scope** — register it after `ClsInterceptor`; outside a scope it fails fast with an explicit diagnostic.
+
 ## Full docs
 
 [apps/docs-site/docs/extensions/mikro-orm](../../apps/docs-site/docs/extensions/mikro-orm.md)

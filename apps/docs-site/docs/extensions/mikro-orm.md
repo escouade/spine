@@ -399,6 +399,21 @@ transport `interceptors` factory exactly as the batteries-included `MikroOrmInte
 above. The module is the convenient path; this factory is the escape hatch and the transparency —
 nothing about `configure()` is hidden.
 
+## Limitations
+
+- **One connection per app.** `MikroOrmModule.configure()` owns a single MikroORM connection for the
+  whole app — importing it (or calling `configure()`) more than once resolves the **same** instance. A
+  second `configure({...})` with _different_ options is silently ignored (the first options win); this
+  package does not model multiple simultaneous databases. Use one `configure()` at the app root.
+- **Pin `@mikro-orm/core` and its driver to the same major.** Repository resolution relies on
+  `instanceof EntityRepository` and a per-entity token map, both identity-sensitive. A **duplicated**
+  `@mikro-orm/core` in the tree (a driver on a different major, a version skew) yields a second
+  `EntityRepository` class and breaks `register([...])`. Keep `@mikro-orm/core` and the
+  `@mikro-orm/*` driver on one major (v6 today) — a single copy in the dependency tree.
+- **The interceptor requires an active CLS scope.** Register `MikroOrmInterceptor` **after**
+  `ClsInterceptor` (see _Wiring the transactional interceptor_ above). Run outside a scope, it fails
+  fast with an explicit diagnostic naming the fix, rather than an opaque error.
+
 ## Reference
 
 ### `MikroOrmModule.configure(options)`
