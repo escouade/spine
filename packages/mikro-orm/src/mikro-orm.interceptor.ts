@@ -80,3 +80,24 @@ export class MikroOrmInterceptor implements GatewayInterceptor {
     return res;
   }
 }
+
+/**
+ * Assert the (transport-agnostic) `MikroOrmInterceptor` into a transport's typed interceptor slot.
+ *
+ * `MikroOrmInterceptor` is a `GatewayInterceptor<GatewayContext, string, DispatchTarget>` — it only
+ * touches CLS, never the `ctx` or the route. But each transport narrows its `interceptors` slot to its
+ * own context + route (e.g. `GatewayInterceptor<HttpBaseContext, string, HttpRoute>`), and those base
+ * types are not auto-assignable to the narrowed slot (variance through `guards`/`invoke`). A
+ * DI-provided instance therefore needs an assertion; this wraps it so a call site reads
+ * `asInterceptor<HttpBaseContext, string, HttpRoute>(orm)` rather than a hand-written `as unknown as`.
+ * `ClsInterceptor` avoids this only because it is constructed (`new ClsInterceptor<Ctx>`) and so takes
+ * its `Ctx` as a type argument; the injected `MikroOrmInterceptor` arrives with a fixed type.
+ */
+export const asInterceptor = <
+  Ctx extends GatewayContext = GatewayContext,
+  Code extends string = string,
+  Route extends DispatchTarget<Ctx> = DispatchTarget<Ctx>
+>(
+  interceptor: MikroOrmInterceptor
+): GatewayInterceptor<Ctx, Code, Route> =>
+  interceptor as unknown as GatewayInterceptor<Ctx, Code, Route>;

@@ -7,7 +7,7 @@ export {
   entityManagerProvider,
   connectWithRetry,
 } from "./mikro-orm.module";
-export { MikroOrmInterceptor } from "./mikro-orm.interceptor";
+export { MikroOrmInterceptor, asInterceptor } from "./mikro-orm.interceptor";
 export { repositoryOf } from "./mikro-orm.repository";
 export type {
   RepositoryRegistration,

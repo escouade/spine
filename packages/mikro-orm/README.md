@@ -112,6 +112,7 @@ interceptors: {
 - **`MikroOrmModule.register([...])`** — exposes a module's repositories: a custom `EntityRepository` subclass (by class token) or an entity class (default repo via `repositoryOf`).
 - **`repositoryOf(Entity)`** — a typed `InjectionToken<EntityRepository<Entity>>` for entities with no custom repository.
 - **`MikroOrmInterceptor`** — forks a per-request `EntityManager` into CLS and `flush()`es it once at request end on a successful envelope (no up-front `begin()`; a request that wrote nothing opens no transaction).
+- **`asInterceptor<Ctx, Code, Route>(orm)`** — asserts the transport-agnostic `MikroOrmInterceptor` into a transport's typed `interceptors` slot (e.g. `asInterceptor<HttpBaseContext, string, HttpRoute>(orm)`).
 - Re-exports `MikroORM`, `EntityManager`, `EntitySchema`, `EntityRepository`, and the `Options` type from `@mikro-orm/core`; plus `mikroOrmProvider` / `entityManagerProvider` / `connectWithRetry` for hand-wiring.
 
 ## Limitations

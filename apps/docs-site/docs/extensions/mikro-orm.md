@@ -171,7 +171,8 @@ transport's `configure({ interceptors })`, **after** `ClsInterceptor` — it for
 ```typescript
 // wherever you configure the transport (HTTP, IPC, …)
 import { ClsInterceptor, ClsModule, ClsService } from "@spinejs/cls";
-import { MikroOrmInterceptor } from "@spinejs/mikro-orm";
+import { MikroOrmInterceptor, asInterceptor } from "@spinejs/mikro-orm";
+import type { HttpBaseContext, HttpRoute } from "@spinejs/http-gateway";
 
 HttpGatewayModule.configure({
   imports: [ClsModule], // ClsService for the ClsInterceptor
@@ -181,8 +182,10 @@ HttpGatewayModule.configure({
   interceptors: {
     inject: [ClsService, MikroOrmInterceptor],
     factory: (cls: ClsService, orm: MikroOrmInterceptor) => [
-      new ClsInterceptor(cls), // 1. outermost: opens the CLS scope
-      orm, // 2. inside the scope: forks the EM + brackets the transaction
+      new ClsInterceptor<HttpBaseContext>(cls), // 1. outermost: opens the CLS scope
+      // 2. inside the scope: forks the EM + flushes at request end. MikroOrmInterceptor is
+      // transport-agnostic, so `asInterceptor` asserts it into this transport's typed slot.
+      asInterceptor<HttpBaseContext, string, HttpRoute>(orm),
     ],
   },
 });
@@ -191,6 +194,12 @@ HttpGatewayModule.configure({
 `MikroOrmInterceptor` is exported by `MikroOrmModule.configure()` (registered app-level in step 2), so
 the interceptor factory resolves it by token. Order matters: `ClsInterceptor` first (it opens the
 scope), `MikroOrmInterceptor` after (it writes the fork into that scope).
+
+`MikroOrmInterceptor` is transport-agnostic (it never reads the `ctx` or the route), so its type is the
+base `GatewayInterceptor<GatewayContext, …>`. Each transport narrows its `interceptors` slot to its own
+context + route, so wrap the injected instance with **`asInterceptor<Ctx, Code, Route>(orm)`** — for IPC,
+`asInterceptor<ElectronIpcBaseContext, string, IpcRoute>(orm)`. (`ClsInterceptor` needs no wrapper: it is
+constructed with `new ClsInterceptor<Ctx>` and takes its context as a type argument.)
 
 ## How the transaction works
 
@@ -460,6 +469,13 @@ The per-request unit-of-work interceptor. Forks a fresh `EntityManager` into the
 `flush()`es it once at the end, only on a successful envelope (no `begin()`; a request that wrote
 nothing opens no transaction). Register it in the transport's `configure({ interceptors })` **after**
 `ClsInterceptor` — it must run inside the CLS scope.
+
+### `asInterceptor<Ctx, Code, Route>(orm)`
+
+Asserts the transport-agnostic `MikroOrmInterceptor` into a transport's typed `interceptors` slot
+(e.g. `asInterceptor<HttpBaseContext, string, HttpRoute>(orm)`). The interceptor's base type
+(`GatewayInterceptor<GatewayContext, …>`) is not auto-assignable to a transport's narrowed slot; this
+wraps the assertion so call sites stay readable. Returns the same instance.
 
 ### Re-exports and factory building blocks
 
