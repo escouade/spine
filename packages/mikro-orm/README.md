@@ -8,58 +8,112 @@ MikroORM integration for SpineJS: a **request-scoped `EntityManager` / unit-of-w
 yarn add @spinejs/mikro-orm @mikro-orm/core @mikro-orm/better-sqlite
 ```
 
-`@spinejs/mikro-orm` depends on `@spinejs/cls` (the request scope) — register `ClsModule` + `ClsInterceptor` alongside it.
+`@mikro-orm/core` and a driver are peers — pin both to **v6** (the sqlite drivers do not yet ship v7). `@spinejs/mikro-orm` builds on `@spinejs/cls` for the request scope, so `ClsModule` + `ClsInterceptor` are wired alongside it.
 
 ## Quick start
 
+Define the entity with `EntitySchema` (no decorators) and a repository for custom queries. The schema's `repository: () => UserRepository` link lets `register([UserRepository])` resolve the entity:
+
 ```typescript
-// app.module.ts — configure the connection once
+// user.entity.ts
+import { EntitySchema, EntityRepository } from "@spinejs/mikro-orm";
+
+export class User {
+  id!: number;
+  email!: string;
+  name!: string;
+}
+export class UserRepository extends EntityRepository<User> {
+  findByEmail(email: string) {
+    return this.findOne({ email });
+  }
+}
+export const UserSchema = new EntitySchema<User>({
+  class: User,
+  repository: () => UserRepository, // required so register([UserRepository]) resolves the entity
+  properties: {
+    id: { type: "number", primary: true, autoincrement: true },
+    email: { type: "string" },
+    name: { type: "string" },
+  },
+});
+```
+
+Configure the connection once at app level (opens on start with retry, closes on stop), and register the repository in the feature module:
+
+```typescript
+// app.module.ts
 import { Module } from "@spinejs/core";
+import { ClsModule } from "@spinejs/cls";
 import { MikroOrmModule } from "@spinejs/mikro-orm";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { UserSchema } from "./user.entity";
+import { UserModule } from "./user.module";
 
 @Module({
   imports: [
+    ClsModule,
     MikroOrmModule.configure({
       driver: BetterSqliteDriver,
       dbName: "app.sqlite",
       entities: [UserSchema],
-      // optional startup retry (defaults: 5 attempts, 200ms, backoff 2)
+      // optional startup retry (defaults: 5 attempts, 200ms, backoff ×2)
       retry: { attempts: 10, delayMs: 500, backoff: 2 },
     }),
+    UserModule,
   ],
 })
 export class AppModule {}
+
+// user.module.ts
+@Module({
+  imports: [MikroOrmModule.register([UserRepository])],
+  providers: [UserService],
+})
+export class UserModule {}
 ```
 
-Register `MikroOrmInterceptor` in your gateway's `configure({ interceptors })` **after** `ClsInterceptor` — it must run inside the CLS scope:
-
-```typescript
-interceptors: [new ClsInterceptor(cls), mikroOrmInterceptor];
-```
-
-Then a service injects the `EntityManager` (or a repository) and mutates entities normally — the change is committed at request end:
+Inject the repository by class token and mutate entities normally — the change is committed at request end, no `.save()`:
 
 ```typescript
 // user.service.ts
 import { Injectable } from "@spinejs/core";
-import { EntityManager } from "@spinejs/mikro-orm";
+import { UserRepository } from "./user.entity";
 
-@Injectable({ inject: [EntityManager] })
+@Injectable({ inject: [UserRepository] })
 export class UserService {
-  constructor(private readonly em: EntityManager) {}
+  constructor(private readonly users: UserRepository) {}
   async rename(id: number, name: string) {
-    const user = await this.em.findOneOrFail(User, { id });
-    user.name = name; // dirty-tracked; committed at request end. No .save().
+    const user = await this.users.findOneOrFail({ id });
+    user.name = name; // dirty-tracked; committed when the request ends. No .save().
   }
 }
 ```
 
-> **Entities:** define them with `EntitySchema` (no decorators) — the portable, recommended style under spine's stage-3 / no-`reflect-metadata` build (ADR 0016, NFR1).
+## Wire the interceptor
+
+Register `MikroOrmInterceptor` in your transport's `configure({ interceptors })` **after** `ClsInterceptor` — it forks the request `EntityManager` into the CLS scope, so it must run inside it:
+
+```typescript
+interceptors: {
+  inject: [ClsService, MikroOrmInterceptor],
+  factory: (cls: ClsService, orm: MikroOrmInterceptor) => [
+    new ClsInterceptor(cls), // outermost: opens the CLS scope
+    orm,                     // inside the scope: forks the EM + brackets the transaction
+  ],
+}
+```
+
+> **Entities:** define them with `EntitySchema` (no decorators) — the portable style under spine's stage-3 / no-`reflect-metadata` build. MikroORM v6 decorator entities are legacy-only (`experimentalDecorators`) and need an explicit `type` per property. See the docs for details.
 
 ## Reference
 
 - **`MikroOrmModule.configure(options)`** — registers the connection; `options` are MikroORM `Options` plus an optional `retry: { attempts, delayMs, backoff }`. Constructs at build, connects on `onStart` (with retry), closes on `onStop`.
+- **`MikroOrmModule.register([...])`** — exposes a module's repositories: a custom `EntityRepository` subclass (by class token) or an entity class (default repo via `repositoryOf`).
+- **`repositoryOf(Entity)`** — a typed `InjectionToken<EntityRepository<Entity>>` for entities with no custom repository.
 - **`MikroOrmInterceptor`** — forks a per-request `EntityManager` into CLS and brackets the dispatch in a transaction (`begin` → `commit` / `rollback`).
-- Re-exports `MikroORM`, `EntityManager`, `EntitySchema`, `EntityRepository`, and the `Options` type from `@mikro-orm/core`.
+- Re-exports `MikroORM`, `EntityManager`, `EntitySchema`, `EntityRepository`, and the `Options` type from `@mikro-orm/core`; plus `mikroOrmProvider` / `entityManagerProvider` / `connectWithRetry` for hand-wiring.
+
+## Full docs
+
+[apps/docs-site/docs/extensions/mikro-orm](../../apps/docs-site/docs/extensions/mikro-orm.md)

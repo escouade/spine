@@ -46,6 +46,7 @@ const sidebars: SidebarsConfig = {
         "extensions/winston-logger",
         "extensions/cls",
         "extensions/scheduler",
+        "extensions/mikro-orm",
       ],
     },
   ],
