@@ -1,0 +1,56 @@
+{
+  "name": "@spinejs/mikro-orm",
+  "version": "0.1.0",
+  "description": "MikroORM integration for SpineJS: request-scoped EntityManager / unit-of-work via CLS.",
+  "keywords": [
+    "spinejs",
+    "orm",
+    "mikro-orm",
+    "entity-manager",
+    "unit-of-work",
+    "request-context"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/escouade/spine.git",
+    "directory": "packages/mikro-orm"
+  },
+  "homepage": "https://github.com/escouade/spine/tree/main/packages/mikro-orm#readme",
+  "bugs": "https://github.com/escouade/spine/issues",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepack": "node ../../scripts/ensure-yarn-pack.cjs"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        },
+        "require": {
+          "types": "./dist/index.d.cts",
+          "default": "./dist/index.cjs"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@mikro-orm/better-sqlite": "^6",
+    "@mikro-orm/core": "^6",
+    "@spinejs/cls": "workspace:^",
+    "@spinejs/core": "workspace:^"
+  }
+}

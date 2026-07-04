@@ -7,6 +7,7 @@
     "packages/core",
     "packages/gateway-core",
     "packages/cls",
+    "packages/mikro-orm",
     "packages/config",
     "packages/winston-logger",
     "packages/electron",

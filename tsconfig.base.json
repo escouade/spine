@@ -24,7 +24,8 @@
       "@spinejs/electron-ipc-gateway": [
         "packages/electron-ipc-gateway/src/index.ts"
       ],
-      "@spinejs/http-gateway": ["packages/http-gateway/src/index.ts"]
+      "@spinejs/http-gateway": ["packages/http-gateway/src/index.ts"],
+      "@spinejs/mikro-orm": ["packages/mikro-orm/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]
