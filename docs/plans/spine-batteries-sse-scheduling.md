@@ -1,8 +1,11 @@
 # Design — SpineJS server batteries: SSE fan-out + CLS-scoped scheduling
 
 - **Date**: 2026-07-04
-- **Status**: design proposal — input for **spine ADR 0017** (SSE) + **spine ADR 0018** (scheduling).
-  Also feeds the re-evaluation of **studio ADR 0017** (jobs-service framework: NestJS vs Spine).
+- **Status**: implemented — the decided trade-offs are recorded in **spine ADR 0017** (SSE,
+  [`docs/adr/0017-sse-fan-out-in-http-gateway.md`](../adr/0017-sse-fan-out-in-http-gateway.md)) +
+  **spine ADR 0018** (scheduling, [`docs/adr/0018-cls-scoped-scheduling.md`](../adr/0018-cls-scoped-scheduling.md)),
+  both Accepted. Also feeds the re-evaluation of **studio ADR 0017** (jobs-service framework: NestJS vs
+  Spine), which stays Accepted/NestJS until WI-D (Part C).
 - **Author**: Winston (architect)
 - **Companion**: [orm-mikro-vs-typeorm-bench.md](./orm-mikro-vs-typeorm-bench.md) (battery 1/3, → spine ADR 0016)
 
