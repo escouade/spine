@@ -9,6 +9,7 @@ import type {
   HttpBaseContext,
   HttpMethod,
 } from "./http-base.types";
+import type { SseEvent } from "./sse-hub";
 
 /**
  * Per-route options for a field route. Each input source (`params`/`query`/`body`) is optional; only
@@ -90,6 +91,8 @@ export interface HttpRouteMeta {
   response?: ParseableSchema<unknown>;
   successStatus?: number;
   headers?: Record<string, string>;
+  /** Marks an SSE (event-stream) route: the HTTP transport streams events instead of buffering an envelope. */
+  sse?: boolean;
 }
 
 /**
@@ -255,3 +258,59 @@ export function httpRoutes<
     del: makeHelper<Ctx>("DELETE"),
   };
 }
+
+/**
+ * Options for an `sse()` event-stream route. `GET` only — no `body`, no `successStatus`, no
+ * `response` (the stream owns the response). `params`/`query` are validated like any route.
+ */
+export interface SseRouteOptions<P, Q> {
+  params?: ParseableSchema<P>;
+  query?: ParseableSchema<Q>;
+  guards?: GuardConstructor[];
+  /** Static headers added to the `text/event-stream` response. */
+  headers?: Record<string, string>;
+}
+
+/**
+ * A module-level Server-Sent Events route: a long-lived `GET` whose callback returns an
+ * `AsyncIterable<SseEvent>` — typically an `SseHub` subscription. The HTTP transport runs guards +
+ * input validation, then streams every yielded event until the client disconnects; it does NOT
+ * buffer an envelope. `input` is inferred from `params`/`query`; `ctx` defaults to `DefaultCtx`.
+ *
+ *   import { sse, SseHub } from "@spinejs/http-gateway";
+ *
+ *   class JobsController {
+ *     constructor(private jobs: JobsHub) {}
+ *     stream = sse("/jobs/stream", {}, (_input, ctx) => this.jobs.subscribe(ctx.user.id));
+ *   }
+ */
+export type SseRouteFn = <
+  S extends SseRouteOptions<unknown, unknown>,
+  Ctx extends HttpBaseContext = DefaultCtx
+>(
+  path: string,
+  options: S,
+  fn: (input: InputOf<S>, ctx: Ctx) => AsyncIterable<SseEvent>
+) => RouteMarker<Ctx, HttpAddress>;
+
+export const sse: SseRouteFn = <
+  S extends SseRouteOptions<unknown, unknown>,
+  Ctx extends HttpBaseContext = DefaultCtx
+>(
+  path: string,
+  options: S,
+  fn: (input: InputOf<S>, ctx: Ctx) => AsyncIterable<SseEvent>
+): RouteMarker<Ctx, HttpAddress> => {
+  const meta: HttpRouteMeta = {
+    inputs: { params: options.params, query: options.query },
+    headers: options.headers,
+    sse: true,
+  };
+  return makeRouteMarker<Ctx, HttpAddress, InputOf<S>>({
+    address: { method: "GET", path },
+    input: composeInput({ params: options.params, query: options.query }),
+    fn,
+    guards: options.guards,
+    meta,
+  });
+};

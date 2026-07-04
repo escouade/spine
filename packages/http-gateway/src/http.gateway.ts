@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
+import { streamSSE } from "hono/streaming";
 import type { Context as HonoCtx } from "hono";
+import type { SSEStreamingApi } from "hono/streaming";
 import {
   DispatchPipeline,
   LoadedRoute,
@@ -8,9 +10,11 @@ import {
   ErrorMapper,
   GatewayInterceptor,
   ContextFactory,
+  UnauthorizedError,
 } from "@spinejs/gateway-core";
 import type { HttpAddress, HttpBaseContext, HttpRaw } from "./http-base.types";
 import type { HttpRouteMeta } from "./http-routes";
+import type { SseEvent } from "./sse-hub";
 
 /** A route the HTTP transport mounts: the shared dispatch target plus the Hono `{ method, path }`. */
 export type HttpRoute<Ctx extends HttpBaseContext = HttpBaseContext> =
@@ -34,17 +38,19 @@ export class HttpGateway<
   private readonly pipeline: DispatchPipeline<Ctx, Code, HttpRoute<Ctx>>;
 
   constructor(
-    validator: Validator,
-    errorMapper: ErrorMapper<Code>,
+    private readonly validator: Validator,
+    private readonly errorMapper: ErrorMapper<Code>,
     private readonly contextFactory: ContextFactory<HttpRaw, Ctx>,
     interceptors: GatewayInterceptor<Ctx, Code, HttpRoute<Ctx>>[] = [],
     private readonly statusMapper: (
       code: Code
-    ) => number = defaultStatusMapper as (code: Code) => number
+    ) => number = defaultStatusMapper as (code: Code) => number,
+    /** Interval (ms) between SSE keep-alive comments on a stream; `0` disables. */
+    private readonly sseHeartbeatMs = 15_000
   ) {
     this.pipeline = new DispatchPipeline<Ctx, Code, HttpRoute<Ctx>>(
-      validator,
-      errorMapper,
+      this.validator,
+      this.errorMapper,
       interceptors
     );
   }
@@ -57,6 +63,10 @@ export class HttpGateway<
   private bind(route: HttpRoute<Ctx>): void {
     const { method, path } = route.address;
     const meta = route.meta as HttpRouteMeta | undefined;
+    if (meta?.sse) {
+      this.app.on(method, path, (c: HonoCtx) => this.dispatchSse(route, c));
+      return;
+    }
     const successStatus = meta?.successStatus;
     this.app.on(method, path, async (c: HonoCtx) => {
       const ctx = this.contextFactory.create(c);
@@ -72,6 +82,43 @@ export class HttpGateway<
       if (envelope.ok && meta?.headers) Object.assign(headers, meta.headers);
       return new Response(JSON.stringify(envelope), { status, headers });
     });
+  }
+
+  /**
+   * SSE dispatch: runs guards + input validation up front (a failure returns a normal JSON error
+   * envelope, no stream), then streams the handler's `AsyncIterable<SseEvent>` to the client until it
+   * disconnects. Bypasses the buffered-`Envelope` pipeline — a stream is many values, not one — while
+   * reusing the same guards, validator and error mapping. No interceptor chain and no per-connection
+   * CLS scope: the handler gets `ctx` directly, and a long-lived stream must not hold scoped resources
+   * (e.g. a DB transaction) open for its whole lifetime.
+   */
+  private async dispatchSse(
+    route: HttpRoute<Ctx>,
+    c: HonoCtx
+  ): Promise<Response> {
+    const ctx = this.contextFactory.create(c);
+    try {
+      for (const guard of route.guards) {
+        if (!(await guard.canActivate(ctx))) throw new UnauthorizedError();
+      }
+      const rawInput = await extractInput(c, "GET");
+      const input = route.input
+        ? this.validator.validate(route.input, rawInput)
+        : rawInput;
+      const events = (await route.invoke(
+        ctx,
+        input
+      )) as AsyncIterable<SseEvent>;
+      return streamSSE(c, (stream) =>
+        pumpSse(stream, events, this.sseHeartbeatMs)
+      );
+    } catch (err) {
+      const code = this.errorMapper.toCode(err);
+      return new Response(JSON.stringify({ ok: false, code }), {
+        status: this.statusMapper(code),
+        headers: { "Content-Type": "application/json" },
+      });
+    }
   }
 
   listen(port: number) {
@@ -92,6 +139,43 @@ async function extractInput(c: HonoCtx, method: string): Promise<unknown> {
     query: c.req.query(),
     body,
   };
+}
+
+/**
+ * Pumps an `AsyncIterable<SseEvent>` to a Hono SSE stream until the iterable ends or the client
+ * disconnects. Sends a periodic `: ping` comment as a keep-alive. On abort/exit it calls the
+ * iterator's `return()` so the source (e.g. an `SseHub`) unsubscribes — no leaked subscription.
+ */
+async function pumpSse(
+  stream: SSEStreamingApi,
+  events: AsyncIterable<SseEvent>,
+  heartbeatMs: number
+): Promise<void> {
+  const iterator = events[Symbol.asyncIterator]();
+  const heartbeat =
+    heartbeatMs > 0
+      ? setInterval(() => void stream.write(": ping\n\n"), heartbeatMs)
+      : undefined;
+  heartbeat?.unref?.(); // never let the keep-alive timer keep the process alive on its own
+  stream.onAbort(() => void iterator.return?.());
+  try {
+    for (;;) {
+      const { value, done } = await iterator.next();
+      if (done || stream.aborted) break;
+      await stream.writeSSE({
+        data:
+          typeof value.data === "string"
+            ? value.data
+            : JSON.stringify(value.data),
+        event: value.event,
+        id: value.id,
+        retry: value.retry,
+      });
+    }
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    await iterator.return?.();
+  }
 }
 
 const defaultStatusMap: Record<string, number> = {
