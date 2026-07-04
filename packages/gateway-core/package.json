@@ -1,6 +1,6 @@
 {
   "name": "@spinejs/gateway-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Transport-agnostic dispatch pipeline for SpineJS gateways.",
   "keywords": [
     "spinejs",
