@@ -17,8 +17,10 @@ Done once per package name (all 8 for the first `0.1.0`). Not run in CI.
 # 1. build the packages
 yarn nx run-many -t build --projects=tag:publishable
 
-# 2. create a short-lived Granular Access token on npmjs.com
-#    (scope: @spinejs, read+write). Export it for yarn:
+# 2. create a short-lived token on npmjs.com that BYPASSES 2FA:
+#    classic "Automation" token, or granular (scope: @spinejs, read+write)
+#    with "Bypass two-factor authentication" checked. A plain token triggers
+#    an EOTP/WebAuthn prompt and yarn crashes in non-interactive shells.
 export YARN_NPM_AUTH_TOKEN=npm_xxx
 
 # 3. publish every package once (yarn converts workspace:* + applies publishConfig)
@@ -94,6 +96,11 @@ cd packages/core && yarn pack --out /tmp/core.tgz && tar -tzf /tmp/core.tgz
 
 ## Notes
 
+- **Post-publish 404s are replication lag, not failure.** npmjs read replication
+  can trail the publish by several minutes: `npm view` / GET returns 404 while a
+  re-publish attempt gets `403 cannot publish over the previously published
+versions` — that 403 is the proof the publish landed. Wait it out; don't
+  re-publish through another path.
 - Build output: dual ESM (`dist/index.js`) + CJS (`dist/index.cjs`) + types
   (`dist/index.d.ts` / `.d.cts`), produced by `tsup` (`tsup.base.ts`).
 - `examples/*` and `apps/docs-site` are `private` and never published.
