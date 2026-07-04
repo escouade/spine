@@ -68,13 +68,24 @@ export function entityForRepository(
   orm: MikroORM,
   repo: EntityRepositoryClass
 ): EntityName<object> {
-  for (const meta of Object.values(orm.getMetadata().getAll())) {
-    if (meta.repository?.() === repo) {
-      return (meta.class ?? meta.className) as EntityName<object>;
-    }
-  }
-  throw new Error(
-    `@spinejs/mikro-orm: no entity declares \`repository: () => ${repo.name}\`. ` +
-      `Add it to the EntitySchema so MikroOrmModule.register([${repo.name}]) can resolve its entity.`
+  const matches = Object.values(orm.getMetadata().getAll()).filter(
+    (meta) => meta.repository?.() === repo
   );
+  if (matches.length === 0) {
+    throw new Error(
+      `@spinejs/mikro-orm: no entity declares \`repository: () => ${repo.name}\`. ` +
+        `Add it to the EntitySchema so MikroOrmModule.register([${repo.name}]) can resolve its entity.`
+    );
+  }
+  if (matches.length > 1) {
+    // A custom repository maps to exactly ONE entity; getAll() order is not contractual, so a shared
+    // repo would otherwise bind to an arbitrary entity (wrong table, silently). Fail loud instead.
+    const names = matches.map((meta) => meta.className).join(", ");
+    throw new Error(
+      `@spinejs/mikro-orm: ${matches.length} entities (${names}) declare \`repository: () => ${repo.name}\`. ` +
+        `A custom repository class must map to exactly one entity — give each entity its own EntityRepository subclass.`
+    );
+  }
+  const [meta] = matches;
+  return (meta.class ?? meta.className) as EntityName<object>;
 }

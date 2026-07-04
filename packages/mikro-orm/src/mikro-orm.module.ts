@@ -88,7 +88,17 @@ export async function connectWithRetry(
   // (`1 <= NaN` is false), which would return WITHOUT connecting and WITHOUT throwing — a "healthy"
   // boot whose first query fails. Guarantees at least one real attempt.
   const attempts = Math.max(1, Math.floor(retry.attempts) || 1);
-  let wait = retry.delayMs;
+  // Coerce delay/backoff too (same spirit as `attempts`): a NaN/negative `delayMs` makes `setTimeout`
+  // fire ~immediately — retries would hammer with no backoff — and a NaN/<1 `backoff` flattens or
+  // inverts the growth. Fall back to the defaults for out-of-range values.
+  let wait =
+    Number.isFinite(retry.delayMs) && retry.delayMs >= 0
+      ? retry.delayMs
+      : DEFAULT_RETRY.delayMs;
+  const backoff =
+    Number.isFinite(retry.backoff) && retry.backoff >= 1
+      ? retry.backoff
+      : DEFAULT_RETRY.backoff;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -112,7 +122,9 @@ export async function connectWithRetry(
         CONTEXT
       );
       await delay(wait);
-      wait *= retry.backoff;
+      // Cap so a large backoff cannot overflow the timer (Node clamps setTimeout > 2^31-1 to 1ms,
+      // which would silently collapse the backoff exactly when the DB needs breathing room).
+      wait = Math.min(wait * backoff, 2_147_483_647);
     }
   }
 }
@@ -149,19 +161,35 @@ class MikroOrmRepositoriesModule {}
  */
 @Module({ inject: [MikroORM, loggerToken, retryPolicyToken] })
 export class MikroOrmModule implements OnStart, OnStop {
+  // Whether onStart actually connected. onStop pairs with onInit (not onStart), so it also runs on a
+  // failed boot — when connectWithRetry threw and the ORM was never connected (ADR 0010).
+  private connected = false;
+
   constructor(
     private readonly orm: MikroORM,
     private readonly log: Logger,
     private readonly retry: RetryPolicy
   ) {}
 
-  onStart(): Promise<void> {
-    return connectWithRetry(this.orm, this.retry, this.log);
+  async onStart(): Promise<void> {
+    await connectWithRetry(this.orm, this.retry, this.log);
+    this.connected = true;
   }
 
   async onStop(): Promise<void> {
+    // Never-connected (boot abort): nothing to close. Closing anyway could throw out of onStop and
+    // MASK the original connection error (App.start drops it if stop() throws) and skip other modules'
+    // onStop. Bail out, and even on the connected path never let close() escape.
+    if (!this.connected) return;
     this.log.debug("Closing the database connection", CONTEXT);
-    await this.orm.close(true);
+    try {
+      await this.orm.close(true);
+    } catch (err) {
+      this.log.error(
+        `Failed to close the database connection: ${String(err)}`,
+        CONTEXT
+      );
+    }
   }
 
   /**

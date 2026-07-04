@@ -199,21 +199,21 @@ The interceptor is the whole differentiator, and it is small:
 ```typescript
 const em = this.orm.em.fork(); // fresh identity map + unit-of-work for THIS request
 this.cls.set(EM, em); // every injected repository/EntityManager now resolves to it
-await em.begin();
-try {
-  const res = await next(); // your handlers + services run here
-  await em.commit(); // flush the unit-of-work, then COMMIT — no explicit .save()
-  return res;
-} catch (e) {
-  await em.rollback(); // discard everything; the identity map dies with the request
-  throw e; // the error is never swallowed — it propagates to the gateway
+const res = await next(); // your handlers + services run here
+// The pipeline never throws: business errors come back as { ok: false }. Flush only a successful
+// unit-of-work — MikroORM wraps the pending changes in ONE transaction (atomic, no explicit .save()).
+// A request that wrote nothing flushes nothing (no transaction); an error envelope persists nothing.
+if (res.ok) {
+  await em.flush();
 }
+return res;
 ```
 
 Why there is no `.save()`: MikroORM has a **unit-of-work** and an **identity map**. When you load an
-entity through the request's `EntityManager`, the ORM tracks it; mutating a field marks it dirty;
-`commit()` flushes every tracked change in one transaction. `fork()` gives each request its own
-identity map, so two concurrent requests never see each other's pending writes — the fork is bound to
+entity through the request's `EntityManager`, the ORM tracks it; mutating a field marks it dirty; the
+request-end `flush()` writes every tracked change in one transaction — and a request that changed
+nothing opens no transaction at all. `fork()` gives each request its own identity map, so two
+concurrent requests never see each other's pending writes — the fork is bound to
 the async context (CLS), not to the injected singleton.
 
 `orm.em` — the getter you inject as `EntityManager` — is always the **root** manager; each operation
@@ -344,7 +344,7 @@ const ormProvider: FactoryProvider<MikroORM> = {
     }),
 };
 
-// 2. Fork + bracket the transaction per dispatch (what MikroOrmInterceptor does).
+// 2. Fork + flush the unit-of-work per dispatch (what MikroOrmInterceptor does).
 export class TransactionInterceptor implements GatewayInterceptor {
   constructor(
     private readonly orm: MikroORM,
@@ -358,15 +358,13 @@ export class TransactionInterceptor implements GatewayInterceptor {
   ): Promise<Envelope<unknown>> {
     const em = this.orm.em.fork();
     this.cls.set(EM, em);
-    await em.begin();
-    try {
-      const res = await next();
-      await em.commit();
-      return res;
-    } catch (e) {
-      await em.rollback();
-      throw e;
+    const res = await next();
+    // The pipeline never throws: business errors are { ok: false }. Flush only a success — atomic,
+    // no .save(); a request that wrote nothing opens no transaction, an error persists nothing.
+    if (res.ok) {
+      await em.flush();
     }
+    return res;
   }
 }
 
@@ -443,10 +441,10 @@ Pair with `register([User])`.
 
 ### `MikroOrmInterceptor`
 
-The per-request transactional interceptor. Forks a fresh `EntityManager` into the CLS scope and
-brackets the dispatch (`begin` → `commit` on success, `rollback` + rethrow on error). Register it in
-the transport's `configure({ interceptors })` **after** `ClsInterceptor` — it must run inside the CLS
-scope.
+The per-request unit-of-work interceptor. Forks a fresh `EntityManager` into the CLS scope and
+`flush()`es it once at the end, only on a successful envelope (no `begin()`; a request that wrote
+nothing opens no transaction). Register it in the transport's `configure({ interceptors })` **after**
+`ClsInterceptor` — it must run inside the CLS scope.
 
 ### Re-exports and factory building blocks
 

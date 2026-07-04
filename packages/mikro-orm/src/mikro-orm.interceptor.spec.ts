@@ -145,6 +145,17 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
     expect(seen[0]).not.toBe(seen[1]); // two requests, two forks
   });
 
+  it("opens NO transaction for a request that writes nothing (lazy flush — read-only pays no BEGIN/COMMIT)", async () => {
+    await dispatch(async () => svc.create("seed")); // its own request seeds a row
+
+    let inTx: boolean | undefined;
+    await dispatch(async () => {
+      await svc.find(1); // read only — nothing dirty
+      inTx = orm.em.getContext().isInTransaction();
+    });
+    expect(inTx).toBe(false); // no up-front begin(): a read-only dispatch never opens a transaction
+  });
+
   it("must run inside a CLS scope — throws if used without ClsInterceptor", async () => {
     await expect(
       mikro.intercept(target, ctx, undefined, async () => ({

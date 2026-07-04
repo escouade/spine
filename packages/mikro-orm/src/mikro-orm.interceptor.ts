@@ -11,18 +11,20 @@ import { EM } from "./mikro-orm.options";
 
 /**
  * The differentiator (ADR 0016 §2). A gateway interceptor that gives every dispatch its own
- * transactional unit-of-work, with **nothing threaded through service signatures**.
+ * request-scoped unit-of-work, with **nothing threaded through service signatures**.
  *
  * It forks a fresh `EntityManager` — one identity map, one unit-of-work — stores it in CLS (so every
- * injected `EntityManager`/repository resolves to it via `getContext()`), and brackets the dispatch:
- * `begin` → `commit` (flush, no explicit `.save()`) on a **successful** envelope, `rollback` on an
- * error envelope or a thrown error.
+ * injected `EntityManager`/repository resolves to it via `getContext()`), runs the dispatch, and
+ * **flushes once at the end on a successful envelope** (`flush`, no explicit `.save()`). There is no
+ * up-front `begin()`: `flush()` wraps the request's pending changes in a single implicit transaction,
+ * so a write is still atomic, yet a request that writes nothing opens no transaction and holds no
+ * connection across its work — read-only and DB-free dispatches pay nothing.
  *
  * The dispatch pipeline (`@spinejs/gateway-core`) **never throws** — guard/validation/handler failures
- * come back as `{ ok: false, code }`, they do not reject `next()`. So the commit/rollback decision is
- * driven by the envelope's `ok`, not by a try/catch: committing unconditionally would persist the
- * unit-of-work on every application error. The `catch` only handles an interceptor-level throw or a
- * failing `commit`/`rollback`.
+ * come back as `{ ok: false, code }`, they do not reject `next()`. So the flush decision is driven by
+ * the envelope's `ok`, not by a try/catch: an error envelope is never flushed (nothing is persisted —
+ * the fork is dropped with the scope, and nothing was ever flushed, so there is nothing to roll back),
+ * and a failing flush propagates to the gateway's error path — never swallowed.
  *
  * Must run **inside** the CLS scope opened by `ClsInterceptor` (ADR 0003): register it in the gateway
  * `configure({ interceptors })` **after** `ClsInterceptor`. Without an active scope, `cls.set()` throws.
@@ -44,22 +46,20 @@ export class MikroOrmInterceptor implements GatewayInterceptor {
     // CLS makes `orm.em`'s operations delegate to it through the `context` hook (ADR 0016 §1-2).
     const em = this.orm.em.fork();
     this.cls.set(EM, em);
-    await em.begin();
-    try {
-      const res = await next();
-      // The pipeline never throws: application errors come back as `{ ok: false }`. Commit only a
-      // successful unit-of-work; roll back on an error envelope — nothing is persisted (ADR 0016 §2).
-      if (res.ok) {
-        await em.commit(); // flush the unit-of-work, then COMMIT — no explicit .save()
-      } else {
-        await em.rollback(); // discard; the identity map dies with the scope
-      }
-      return res;
-    } catch (e) {
-      // Interceptor-level throw, or a commit/rollback failure: discard any open transaction and
-      // propagate. Never swallowed — the error reaches the gateway's error path (ADR 0016 §5).
-      if (em.isInTransaction()) await em.rollback();
-      throw e;
+
+    const res = await next();
+
+    // No up-front `begin()`: the unit-of-work is flushed once, at the end, and ONLY on a successful
+    // envelope. The pipeline never throws — guard/validation/handler failures come back as
+    // `{ ok: false }` — so this drives the flush, not a try/catch. `flush()` wraps the pending changes
+    // in a single implicit transaction (atomic, no explicit `.save()`); a request that wrote nothing
+    // flushes nothing, so a read-only or DB-free dispatch opens no transaction and holds no connection
+    // across its work. An error envelope persists nothing — the fork is dropped with the scope, and
+    // nothing was ever flushed, so there is nothing to roll back. A failing `flush()` (e.g. a
+    // constraint violation) throws out of here; the pipeline maps it to an error code (ADR 0016 §2, §5).
+    if (res.ok) {
+      await em.flush();
     }
+    return res;
   }
 }

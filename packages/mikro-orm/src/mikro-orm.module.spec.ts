@@ -122,6 +122,33 @@ describe("MikroOrmModule — lifecycle + startup retry (Story 1.2)", () => {
       expect(closeSpy).toHaveBeenCalledTimes(1);
       expect(await orm.isConnected()).toBe(false);
     });
+
+    // BUG (E6): onStop pairs with onInit, so it also runs on a failed boot. Closing a never-connected
+    // ORM must be a no-op — closing anyway could throw out of onStop and MASK the connection error.
+    it("onStop does NOT close when the ORM never connected (boot abort must not be masked)", async () => {
+      const connect = vi.fn().mockRejectedValue(new Error("no db"));
+      const close = vi.fn().mockResolvedValue(undefined);
+      const fakeOrm = { connect, close } as unknown as MikroORM;
+      const retry: RetryPolicy = { attempts: 1, delayMs: 1, backoff: 1 };
+      const mod = new MikroOrmModule(fakeOrm, silentLogger, retry);
+
+      await expect(mod.onStart()).rejects.toThrow("no db"); // boot abort
+      await expect(mod.onStop()).resolves.toBeUndefined();
+      expect(close).not.toHaveBeenCalled(); // nothing to close, error not masked
+    });
+
+    // A close() failure on the connected path must be logged, never thrown out of onStop — otherwise it
+    // aborts the rest of shutdown (other modules' onStop).
+    it("onStop never lets a close() failure escape", async () => {
+      const connect = vi.fn().mockResolvedValue(undefined);
+      const close = vi.fn().mockRejectedValue(new Error("close failed"));
+      const fakeOrm = { connect, close } as unknown as MikroORM;
+      const mod = new MikroOrmModule(fakeOrm, silentLogger, DEFAULT_RETRY);
+
+      await mod.onStart(); // connected = true
+      await expect(mod.onStop()).resolves.toBeUndefined(); // swallowed + logged, not thrown
+      expect(close).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("retry (fake connect to control transient/permanent failure)", () => {
@@ -183,6 +210,28 @@ describe("MikroOrmModule — lifecycle + startup retry (Story 1.2)", () => {
 
       await expect(connectWithRetry(fakeOrm, retry)).rejects.toThrow("no db");
       expect(connect).toHaveBeenCalledTimes(2);
+    });
+
+    // BUG (P4): a NaN delayMs/backoff must be coerced to a finite delay — otherwise setTimeout(NaN)
+    // fires ~immediately and the backoff silently collapses exactly when the DB needs breathing room.
+    it("coerces NaN delayMs/backoff to the default (never schedules setTimeout(NaN))", async () => {
+      const connect = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("db booting"))
+        .mockResolvedValue(undefined);
+      const fakeOrm = { connect } as unknown as MikroORM;
+      const retry = { attempts: 3, delayMs: NaN, backoff: NaN } as RetryPolicy;
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        await connectWithRetry(fakeOrm, retry);
+        expect(connect).toHaveBeenCalledTimes(2); // retried the transient failure, then succeeded
+        const delays = setTimeoutSpy.mock.calls.map((c) => c[1]);
+        expect(delays.every((d) => Number.isFinite(d))).toBe(true);
+        expect(delays).toContain(DEFAULT_RETRY.delayMs);
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
     });
   });
 });

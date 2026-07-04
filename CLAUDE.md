@@ -26,7 +26,7 @@ yarn format:write
 
 ## Docs
 
-Toute modif de l'interface publique du framework (API, decorators, types exportés, options) ou tout ajout de feature doit être répercutée dans la doc Docusaurus, EN **et** FR (`apps/docs-site/docs/**/*.md` + `apps/docs-site/i18n/fr/docusaurus-plugin-content-docs/current/**/*.md`, et `apps/docs-site/src/pages/index.tsx` + `apps/docs-site/i18n/fr/code.json` pour la home).
+Toute modif de l'interface publique du framework (API, decorators, types exportés, options) ou tout ajout de feature doit être répercutée dans la doc Docusaurus, EN **et** FR (`apps/docs-site/docs/**/*.md` + `apps/docs-site/i18n/fr/docusaurus-plugin-content-docs/current/**/*.md`). Tout nouveau package/extension doit **en plus** être ajouté à la table « Package overview » de la page intro (`apps/docs-site/docs/intro.md` + son miroir FR `apps/docs-site/i18n/fr/docusaurus-plugin-content-docs/current/intro.md`).
 
 ### Style de documentation pédagogique
 
