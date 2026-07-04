@@ -56,23 +56,24 @@ Le guide [**Prise en main**](getting-started) vous mène d'un dossier vide à un
 
 ## Où aller ensuite
 
-| Section                              | Couvre                                                   |
-| ------------------------------------ | -------------------------------------------------------- |
-| [Prise en main](getting-started)     | Construire une API HTTP de bout en bout en cinq étapes   |
-| [SpineJS Core](core/overview)        | `App`, modules, DI, cycle de vie, logger intégré         |
-| [Gateway](gateway/overview)          | Contrôleurs, handlers, guards, validation, intercepteurs |
-| [Extensions](extensions/config)      | Chargement de config typé, logger Winston, ORM MikroORM  |
-| [Electron](electron/electron-module) | Intégration du cycle de vie Electron et transport IPC    |
+| Section                              | Couvre                                                                 |
+| ------------------------------------ | ---------------------------------------------------------------------- |
+| [Prise en main](getting-started)     | Construire une API HTTP de bout en bout en cinq étapes                 |
+| [SpineJS Core](core/overview)        | `App`, modules, DI, cycle de vie, logger intégré                       |
+| [Gateway](gateway/overview)          | Contrôleurs, handlers, guards, validation, intercepteurs               |
+| [Extensions](extensions/config)      | Chargement de config typé, logger Winston, ORM MikroORM, planification |
+| [Electron](electron/electron-module) | Intégration du cycle de vie Electron et transport IPC                  |
 
 ## Aperçu des packages
 
-| Package                         | Rôle                                                                                                                                   |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `@spinejs/core`                 | Système de modules, conteneur DI, orchestrateur `App`, hooks de cycle de vie, logger intégré                                           |
-| `@spinejs/gateway-core`         | Briques pour construire une gateway de transport : `DispatchPipeline`, ports, `@Controller`, routes en champ, `@UseGuards`, `Envelope` |
-| `@spinejs/electron-ipc-gateway` | Transport IPC Electron — compose le pipeline sur `ipcMain.handle`                                                                      |
-| `@spinejs/http-gateway`         | Transport HTTP sur Hono — compose le pipeline sur des routes HTTP                                                                      |
-| `@spinejs/electron`             | `ElectronModule` (fenêtre + cycle de vie) et `WindowService`                                                                           |
-| `@spinejs/config`               | Chargement de configuration typé et asynchrone                                                                                         |
-| `@spinejs/mikro-orm`            | Intégration MikroORM : unité de travail scopée par requête (persiste sans `.save()`), repositories injectés par token de classe        |
-| `@spinejs/winston-logger`       | Implémentation de `Logger` clé en main basée sur Winston                                                                               |
+| Package                         | Rôle                                                                                                                                                              |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@spinejs/core`                 | Système de modules, conteneur DI, orchestrateur `App`, hooks de cycle de vie, logger intégré                                                                      |
+| `@spinejs/gateway-core`         | Briques pour construire une gateway de transport : `DispatchPipeline`, ports, `@Controller`, routes en champ, `@UseGuards`, `Envelope`                            |
+| `@spinejs/electron-ipc-gateway` | Transport IPC Electron — compose le pipeline sur `ipcMain.handle`                                                                                                 |
+| `@spinejs/http-gateway`         | Transport HTTP sur Hono — compose le pipeline sur des routes HTTP                                                                                                 |
+| `@spinejs/electron`             | `ElectronModule` (fenêtre + cycle de vie) et `WindowService`                                                                                                      |
+| `@spinejs/config`               | Chargement de configuration typé et asynchrone                                                                                                                    |
+| `@spinejs/mikro-orm`            | Intégration MikroORM : unité de travail scopée par requête (persiste sans `.save()`), repositories injectés par token de classe                                   |
+| `@spinejs/scheduler`            | Tâches périodiques d'arrière-plan (par intervalle) ; chaque tick s'exécute dans son propre scope CLS — une requête synthétique avec une unité de travail par tick |
+| `@spinejs/winston-logger`       | Implémentation de `Logger` clé en main basée sur Winston                                                                                                          |

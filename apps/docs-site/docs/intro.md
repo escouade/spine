@@ -56,13 +56,13 @@ The [**Getting Started**](getting-started) guide takes you from an empty folder 
 
 ## Where to go next
 
-| Section                              | Covers                                                    |
-| ------------------------------------ | --------------------------------------------------------- |
-| [Getting Started](getting-started)   | Build a live HTTP API end-to-end in five steps            |
-| [App Core](core/overview)            | `App`, modules, DI, lifecycle, built-in logger            |
-| [Gateway](gateway/overview)          | Controllers, handlers, guards, validation, interceptors   |
-| [Extensions](extensions/config)      | Typed config loading, Winston logger, MikroORM ORM        |
-| [Electron](electron/electron-module) | Electron-specific lifecycle integration and IPC transport |
+| Section                              | Covers                                                         |
+| ------------------------------------ | -------------------------------------------------------------- |
+| [Getting Started](getting-started)   | Build a live HTTP API end-to-end in five steps                 |
+| [App Core](core/overview)            | `App`, modules, DI, lifecycle, built-in logger                 |
+| [Gateway](gateway/overview)          | Controllers, handlers, guards, validation, interceptors        |
+| [Extensions](extensions/config)      | Typed config loading, Winston logger, MikroORM ORM, scheduling |
+| [Electron](electron/electron-module) | Electron-specific lifecycle integration and IPC transport      |
 
 ## Package overview
 
@@ -76,3 +76,4 @@ The [**Getting Started**](getting-started) guide takes you from an empty folder 
 | `@spinejs/config`               | Typed, async-capable config loading                                                                                            |
 | `@spinejs/winston-logger`       | Drop-in `Logger` implementation backed by Winston                                                                              |
 | `@spinejs/mikro-orm`            | MikroORM integration: request-scoped unit-of-work (persist without `.save()`), repositories injected by class token            |
+| `@spinejs/scheduler`            | Periodic background tasks (interval); each tick runs in its own CLS scope — a synthetic request with a per-tick unit-of-work   |
