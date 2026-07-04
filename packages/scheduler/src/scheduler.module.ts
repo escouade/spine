@@ -25,6 +25,9 @@ import { SchedulerRegistry } from "./scheduler.registry";
  *   ],
  * })
  * ```
+ *
+ * `mikroOrmUnitOfWork` ships with the separate `@spinejs/mikro-orm` battery; the scheduler has no ORM
+ * dependency — any `around` hook composes the same way.
  */
 @Module({ inject: [SchedulerRegistry] })
 export class SchedulerModule implements OnStart, OnStop {

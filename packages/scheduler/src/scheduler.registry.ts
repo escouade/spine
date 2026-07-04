@@ -8,6 +8,8 @@ interface TaskState {
   readonly boundRun: () => Promise<void>;
   timer?: ReturnType<typeof setInterval>;
   running: boolean;
+  /** For `queue`: ticks currently waiting in the chain (bounded by `maxQueued`). */
+  queuedDepth: number;
   /** Resolves when the current (and, for `queue`, any trailing) tick settles. */
   inflight: Promise<void>;
 }
@@ -27,12 +29,25 @@ const compose = (
 export class SchedulerRegistry {
   private readonly states = new Map<string, TaskState>();
 
-  constructor(private readonly cls: ClsService, private readonly log: Logger) {}
+  /**
+   * @param maxQueued Cap on pending `queue`-mode ticks per task; extra ticks are dropped with a
+   * warning so a task slower than its interval cannot grow an unbounded backlog. Default 1000.
+   */
+  constructor(
+    private readonly cls: ClsService,
+    private readonly log: Logger,
+    private readonly maxQueued = 1000
+  ) {}
 
   /** Register a task with its already-resolved dependency instances (positional, matching `task.inject`). */
   register(task: ScheduledTask, deps: readonly unknown[]): void {
     if (this.states.has(task.name)) {
       throw new Error(`Scheduler: duplicate task name "${task.name}"`);
+    }
+    if (!Number.isFinite(task.everyMs) || task.everyMs <= 0) {
+      throw new Error(
+        `Scheduler: task "${task.name}" has invalid everyMs (${task.everyMs}); must be a positive finite number`
+      );
     }
     const run = async (): Promise<void> => {
       await task.run(...deps);
@@ -41,6 +56,7 @@ export class SchedulerRegistry {
       task,
       boundRun: compose(task.around ?? [], run),
       running: false,
+      queuedDepth: 0,
       inflight: Promise.resolve(),
     });
   }
@@ -68,10 +84,18 @@ export class SchedulerRegistry {
     if (!s) return Promise.resolve();
     const overlap = s.task.overlap ?? "skip";
     if (overlap === "queue") {
-      const next = s.inflight.then(
-        () => this.runOnce(s),
-        () => this.runOnce(s)
-      );
+      if (s.queuedDepth >= this.maxQueued) {
+        this.log.warn(
+          `scheduler task "${s.task.name}": queue at capacity (${this.maxQueued}); dropping tick`
+        );
+        return s.inflight;
+      }
+      s.queuedDepth += 1;
+      const runQueued = (): Promise<void> => {
+        s.queuedDepth -= 1;
+        return this.runOnce(s);
+      };
+      const next = s.inflight.then(runQueued, runQueued);
       s.inflight = next;
       return next;
     }
@@ -82,10 +106,11 @@ export class SchedulerRegistry {
 
   private async runOnce(s: TaskState): Promise<void> {
     s.running = true;
-    const seed: ClsStore = s.task.seed?.() ?? {};
     try {
       // Each tick is its own CLS scope: a synthetic request. `around` hooks (e.g. a UnitOfWork)
       // run inside it, so services resolve request-scoped state with no manager threading.
+      // `seed()` is inside the try so a throwing seed is caught/logged (not left wedging `running`).
+      const seed: ClsStore = s.task.seed?.() ?? {};
       await this.cls.run(seed, s.boundRun);
     } catch (e) {
       this.log.error(`scheduler task "${s.task.name}" failed`, e);

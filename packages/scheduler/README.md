@@ -43,6 +43,10 @@ import { mikroOrmUnitOfWork } from "@spinejs/mikro-orm"; // per-tick UnitOfWork 
 export class AppModule {}
 ```
 
+> **`mikroOrmUnitOfWork` ships with the separate `@spinejs/mikro-orm` battery** — the scheduler itself
+> has **no** ORM dependency. It is just an `around` hook; any `around` (tracing, metrics, your own
+> unit-of-work) composes the same way (see **Custom `around`** below).
+
 The task's service reads and writes through the request-scoped `EntityManager` — no manager
 threading, no explicit `.save()`, identical to an HTTP handler:
 
