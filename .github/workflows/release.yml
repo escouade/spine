@@ -16,9 +16,8 @@ on:
   workflow_dispatch:
     inputs:
       specifier:
-        description: "Version or bump (e.g. 0.1.0, patch, minor, major)"
-        required: true
-        default: "0.1.0"
+        description: "Version or bump (e.g. 0.2.0, patch, minor, major). Ignored when publish_only."
+        required: false
       first_release:
         description: "First release (no prior git tag to diff against)"
         type: boolean
@@ -27,6 +26,14 @@ on:
         description: "Dry run — version/changelog preview, no push, no publish"
         type: boolean
         default: false
+      publish_only:
+        description: "Recovery: skip version/tag, build + publish HEAD as-is"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -35,6 +42,22 @@ jobs:
       contents: write # push the release commit + tag, create the GitHub release
       id-token: write # npm provenance attestation
     steps:
+      - name: Require branch ref
+        if: ${{ !startsWith(github.ref, 'refs/heads/') }}
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "Release must run from a branch (nx release pushes a commit), got $REF"
+          exit 1
+
+      - name: Validate specifier
+        if: ${{ !inputs.publish_only }}
+        env:
+          SPECIFIER: ${{ inputs.specifier }}
+        run: |
+          printf '%s' "$SPECIFIER" | grep -Eq '^(patch|minor|major|prepatch|preminor|premajor|prerelease|[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$' \
+            || { echo "Invalid specifier: '$SPECIFIER' (expected a bump keyword or an exact semver version)"; exit 1; }
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history so the changelog can diff against tags
@@ -53,8 +76,27 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      # The publish step selects by --no-private while build/version select by
+      # the `publishable` nx tag — enforce that the two sets stay identical.
+      - name: Verify publishable tag matches non-private workspaces
+        run: |
+          node -e '
+          const fs = require("fs");
+          const bad = [];
+          for (const d of fs.readdirSync("packages")) {
+            const mj = `packages/${d}/package.json`, pj = `packages/${d}/project.json`;
+            if (!fs.existsSync(mj)) continue;
+            const tagged = fs.existsSync(pj) && (JSON.parse(fs.readFileSync(pj, "utf8")).tags || []).includes("publishable");
+            const priv = !!JSON.parse(fs.readFileSync(mj, "utf8")).private;
+            if (tagged === priv) bad.push(d);
+          }
+          if (bad.length) { console.error("publishable tag / private field mismatch:", bad.join(", ")); process.exit(1); }'
+
       - name: Build packages
         run: yarn nx run-many -t build --projects=tag:publishable
+
+      - name: Lint, typecheck, test
+        run: yarn nx run-many -t lint typecheck test
 
       - name: Configure git identity
         run: |
@@ -62,14 +104,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Version, changelog, tag
+        if: ${{ !inputs.publish_only }}
         run: >-
-          yarn nx release ${{ inputs.specifier }}
+          yarn nx release "$SPECIFIER"
           --skip-publish
           ${{ inputs.first_release && '--first-release' || '' }}
           ${{ inputs.dry_run && '--dry-run' || '' }}
           --yes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SPECIFIER: ${{ inputs.specifier }}
+          # nx release runs `yarn install --mode update-lockfile` after the bump;
+          # yarn defaults to immutable installs in CI, which would abort it.
+          YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
 
       # OIDC trusted publishing needs the npm CLI >= 11.5.1; Node 20 ships npm 10.
       - name: Upgrade npm (OIDC support)
@@ -80,8 +127,17 @@ jobs:
       # for a short-lived npm session. Provenance is generated automatically.
       # `yarn pack` produces the correct tarball (workspace:* -> version,
       # publishConfig -> dist entry points); npm only uploads it.
+      # Already-published versions are skipped (npm has no --tolerate-republish),
+      # so a publish_only re-run resumes cleanly after a partial failure.
       - name: Publish to npm (OIDC)
         if: ${{ !inputs.dry_run }}
-        run: >-
-          yarn workspaces foreach --all --no-private --topological
-          exec 'yarn pack --out package.tgz && npm publish package.tgz'
+        run: |
+          yarn workspaces foreach --all --no-private --topological exec bash -c '
+            n=$(node -p "require(\"./package.json\").name")
+            v=$(node -p "require(\"./package.json\").version")
+            if npm view "$n@$v" version >/dev/null 2>&1; then
+              echo "$n@$v already on npm — skipping"
+            else
+              yarn pack --out package.tgz && npm publish package.tgz
+            fi
+          '
