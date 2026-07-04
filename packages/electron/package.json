@@ -23,7 +23,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "prepack": "node ../../scripts/ensure-yarn-pack.cjs"
   },
   "publishConfig": {
     "access": "public",
@@ -44,7 +45,7 @@
     }
   },
   "dependencies": {
-    "@spinejs/core": "workspace:*"
+    "@spinejs/core": "workspace:^"
   },
   "peerDependencies": {
     "electron": ">=30.0.0"

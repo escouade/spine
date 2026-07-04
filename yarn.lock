@@ -4608,8 +4608,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@spinejs/cls@workspace:packages/cls"
   dependencies:
-    "@spinejs/core": "workspace:*"
-    "@spinejs/gateway-core": "workspace:*"
+    "@spinejs/core": "workspace:^"
+    "@spinejs/gateway-core": "workspace:^"
   languageName: unknown
   linkType: soft
 
@@ -4617,11 +4617,11 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@spinejs/config@workspace:packages/config"
   dependencies:
-    "@spinejs/core": "workspace:*"
+    "@spinejs/core": "workspace:^"
   languageName: unknown
   linkType: soft
 
-"@spinejs/core@workspace:*, @spinejs/core@workspace:packages/core":
+"@spinejs/core@workspace:*, @spinejs/core@workspace:^, @spinejs/core@workspace:packages/core":
   version: 0.0.0-use.local
   resolution: "@spinejs/core@workspace:packages/core"
   languageName: unknown
@@ -4650,8 +4650,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@spinejs/electron-ipc-gateway@workspace:packages/electron-ipc-gateway"
   dependencies:
-    "@spinejs/core": "workspace:*"
-    "@spinejs/gateway-core": "workspace:*"
+    "@spinejs/core": "workspace:^"
+    "@spinejs/gateway-core": "workspace:^"
     zod: "npm:^3.25.76"
   peerDependencies:
     electron: ">=30.0.0"
@@ -4666,17 +4666,17 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@spinejs/electron@workspace:packages/electron"
   dependencies:
-    "@spinejs/core": "workspace:*"
+    "@spinejs/core": "workspace:^"
   peerDependencies:
     electron: ">=30.0.0"
   languageName: unknown
   linkType: soft
 
-"@spinejs/gateway-core@workspace:*, @spinejs/gateway-core@workspace:packages/gateway-core":
+"@spinejs/gateway-core@workspace:*, @spinejs/gateway-core@workspace:^, @spinejs/gateway-core@workspace:packages/gateway-core":
   version: 0.0.0-use.local
   resolution: "@spinejs/gateway-core@workspace:packages/gateway-core"
   dependencies:
-    "@spinejs/core": "workspace:*"
+    "@spinejs/core": "workspace:^"
   languageName: unknown
   linkType: soft
 
@@ -4685,8 +4685,8 @@ __metadata:
   resolution: "@spinejs/http-gateway@workspace:packages/http-gateway"
   dependencies:
     "@hono/node-server": "npm:^2.0.6"
-    "@spinejs/core": "workspace:*"
-    "@spinejs/gateway-core": "workspace:*"
+    "@spinejs/core": "workspace:^"
+    "@spinejs/gateway-core": "workspace:^"
     hono: "npm:^4.12.27"
     zod: "npm:^3.25.76"
   languageName: unknown
@@ -4718,7 +4718,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@spinejs/winston-logger@workspace:packages/winston-logger"
   dependencies:
-    "@spinejs/core": "workspace:*"
+    "@spinejs/core": "workspace:^"
     fast-safe-stringify: "npm:^2.1.1"
     logform: "npm:^2.7.0"
     triple-beam: "npm:^1.4.1"
