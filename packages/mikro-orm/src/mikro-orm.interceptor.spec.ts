@@ -6,8 +6,9 @@ import type {
   DispatchTarget,
   Envelope,
   GatewayContext,
+  GatewayInterceptor,
 } from "@spinejs/gateway-core";
-import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
+import { MikroOrmInterceptor, asInterceptor } from "./mikro-orm.interceptor";
 import { mikroOrmProvider, entityManagerProvider } from "./mikro-orm.module";
 import { EM } from "./mikro-orm.options";
 import type { Logger } from "@spinejs/core";
@@ -165,6 +166,16 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
       inTx = orm.em.getContext().isInTransaction();
     });
     expect(inTx).toBe(false); // no up-front begin(): a read-only dispatch never opens a transaction
+  });
+
+  it("asInterceptor asserts the interceptor into a transport's narrowed slot (same instance)", () => {
+    // Stand-in for a transport's narrowed route type (adds address/meta like a LoadedRoute). The
+    // assignment only compiles because asInterceptor bridges the base interceptor to the narrowed
+    // slot — a compile-time regression guard for the helper's signature.
+    type NarrowRoute = DispatchTarget<GatewayContext> & { address: string };
+    const slot: GatewayInterceptor<GatewayContext, string, NarrowRoute> =
+      asInterceptor<GatewayContext, string, NarrowRoute>(mikro);
+    expect(slot).toBe(mikro); // pass-through, not a wrapper
   });
 
   it("fails fast with a clear, logged diagnostic when run outside a CLS scope", async () => {
