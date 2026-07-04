@@ -15,6 +15,7 @@ import {
 } from "@mikro-orm/core";
 import { ClsModule, ClsService } from "@spinejs/cls";
 import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
+import { SpineMikroLogger } from "./mikro-orm.logger";
 import {
   entityForRepository,
   isRepositoryClass,
@@ -44,17 +45,23 @@ const delay = (ms: number): Promise<void> =>
 export const mikroOrmProvider: FactoryProvider<MikroORM> = {
   provide: MikroORM,
   inject: [ClsService, mikroOrmOptionsToken, loggerToken],
-  factory: (cls: ClsService, options: Options, log?: Logger): MikroORM =>
-    MikroORM.initSync({
+  factory: (cls: ClsService, options: Options, log?: Logger): MikroORM => {
+    const base: Options = {
       ...options,
       // The load-bearing fact: one AsyncLocalStorage (spine's) backs the request-scoped EntityManager.
       context: () => cls.get(EM) as EntityManager | undefined,
-      // Bridge MikroORM's log output (queries under `debug`, connection events) to the spine logger —
-      // one sink (ADR 0016 §5). A user-supplied `logger` wins; a missing spine logger degrades to a
-      // no-op (never throws), so the module works even before a logger is available.
-      logger:
-        options.logger ?? ((message: string) => log?.debug(message, CONTEXT)),
-    }),
+    };
+    // Bridge MikroORM's logging to the spine logger — one sink, with severity preserved and ANSI
+    // stripped (ADR 0016 §5, see SpineMikroLogger). A user-supplied `logger`/`loggerFactory` wins; with
+    // no spine logger the bridge is simply not installed (a no-op default), so it never throws.
+    if (log && !options.logger && !options.loggerFactory) {
+      return MikroORM.initSync({
+        ...base,
+        loggerFactory: (opts) => new SpineMikroLogger(opts, log),
+      });
+    }
+    return MikroORM.initSync(base);
+  },
 };
 
 /**
@@ -77,7 +84,10 @@ export async function connectWithRetry(
   retry: RetryPolicy,
   log?: Logger
 ): Promise<void> {
-  const attempts = Math.max(1, retry.attempts);
+  // Coerce to a positive integer: a NaN/fractional/≤0 `attempts` must never make the loop skip
+  // (`1 <= NaN` is false), which would return WITHOUT connecting and WITHOUT throwing — a "healthy"
+  // boot whose first query fails. Guarantees at least one real attempt.
+  const attempts = Math.max(1, Math.floor(retry.attempts) || 1);
   let wait = retry.delayMs;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -106,6 +116,15 @@ export async function connectWithRetry(
     }
   }
 }
+
+/**
+ * Internal per-registration feature module. `register()` returns it as a **`fresh`** DynamicModule, so
+ * each call is an ISOLATED node (identity = the DynamicModule object, not this class): its repository
+ * tokens are exported only to the importing module and do **not** accumulate on the shared connection
+ * node. It imports `MikroOrmModule` so the one shared `MikroORM` connection resolves the repositories.
+ */
+@Module({})
+class MikroOrmRepositoriesModule {}
 
 /**
  * Owns the database connection for a spine app. `MikroOrmModule.configure(options)` registers a single
@@ -176,8 +195,12 @@ export class MikroOrmModule implements OnStart, OnStop {
    *
    * An entry is either a **custom repository class** (a `EntityRepository<Entity>` subclass — its entity
    * is read back from the `EntitySchema`'s `repository: () => …` link) or an **entity class** (exposes
-   * the default `EntityRepository` under `repositoryOf(Entity)`). Merges into the single
-   * `MikroOrmModule` node, so `configure()` (the connection) and every `register()` share one instance.
+   * the default `EntityRepository` under `repositoryOf(Entity)`).
+   *
+   * Each call is **isolated** (a `fresh` node): its repo tokens are visible only to the module that
+   * imports this `register(...)`, never to sibling modules. The connection stays shared — the fresh node
+   * imports `MikroOrmModule`, so there is still one `MikroORM` instance and repos resolve the request
+   * fork. A feature module that also needs `EntityManager`/`MikroOrmInterceptor` imports `MikroOrmModule`.
    */
   static register(items: RepositoryRegistration[]): DynamicModule {
     const providers = items.map(
@@ -197,7 +220,11 @@ export class MikroOrmModule implements OnStart, OnStop {
     );
 
     return {
-      module: MikroOrmModule,
+      module: MikroOrmRepositoriesModule,
+      // `fresh` → a distinct node per call: repo tokens do NOT leak to other modules (feature isolation).
+      fresh: true,
+      // Share the single connection so `MikroORM`/`EntityManager` resolve (one instance, request fork).
+      imports: [MikroOrmModule],
       providers,
       exports: providers.map((p) => p.provide),
     };

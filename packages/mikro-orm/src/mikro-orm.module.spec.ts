@@ -155,6 +155,35 @@ describe("MikroOrmModule — lifecycle + startup retry (Story 1.2)", () => {
       await connectWithRetry(fakeOrm, DEFAULT_RETRY);
       expect(connect).toHaveBeenCalledTimes(1);
     });
+
+    // BUG 3: a NaN/fractional/≤0 `attempts` must NOT silently resolve without connecting — that boots a
+    // "healthy" app whose first query fails. It must make at least one real attempt (connect, or throw).
+    it("attempts=NaN behaves as one real attempt (throws, never silent-resolves)", async () => {
+      const connect = vi.fn().mockRejectedValue(new Error("no db"));
+      const fakeOrm = { connect, close: vi.fn() } as unknown as MikroORM;
+      const retry = { attempts: NaN, delayMs: 1, backoff: 1 } as RetryPolicy;
+
+      await expect(connectWithRetry(fakeOrm, retry)).rejects.toThrow("no db");
+      expect(connect).toHaveBeenCalledTimes(1);
+    });
+
+    it("attempts=NaN connects once when the DB is up (does not skip the connect)", async () => {
+      const connect = vi.fn().mockResolvedValue(undefined);
+      const fakeOrm = { connect } as unknown as MikroORM;
+      const retry = { attempts: NaN, delayMs: 1, backoff: 1 } as RetryPolicy;
+
+      await connectWithRetry(fakeOrm, retry);
+      expect(connect).toHaveBeenCalledTimes(1);
+    });
+
+    it("fractional attempts floor to whole retries (2.9 → 2 attempts)", async () => {
+      const connect = vi.fn().mockRejectedValue(new Error("no db"));
+      const fakeOrm = { connect, close: vi.fn() } as unknown as MikroORM;
+      const retry = { attempts: 2.9, delayMs: 1, backoff: 1 } as RetryPolicy;
+
+      await expect(connectWithRetry(fakeOrm, retry)).rejects.toThrow("no db");
+      expect(connect).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

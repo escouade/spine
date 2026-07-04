@@ -59,7 +59,13 @@ let captured: Captured | undefined;
 
 @Module({
   inject: [ClsService, MikroOrmInterceptor, UserService, MikroORM],
-  imports: [ClsModule, MikroOrmModule.register([UserRepository])],
+  // MikroOrmModule (bare) exposes the shared connection (MikroORM/EntityManager/interceptor);
+  // register([...]) exposes THIS module's repository (UserRepository), isolated to it.
+  imports: [
+    ClsModule,
+    MikroOrmModule,
+    MikroOrmModule.register([UserRepository]),
+  ],
   providers: [UserService],
 })
 class FeatureModule {
@@ -267,5 +273,85 @@ describe("MikroOrmModule end-to-end through a real App (Story 1.6)", () => {
     await app.init();
     await expect(app.start()).rejects.toThrow("permanent db failure");
     expect(attempts).toBe(2); // tried exactly the budget, then aborted
+  });
+});
+
+// BUG 2: register() must isolate repos per importing module. Two entities, each with its own repo.
+class EntityA {
+  id!: number;
+  a!: string;
+}
+class RepoA extends EntityRepository<EntityA> {}
+const SchemaA = new EntitySchema<EntityA>({
+  class: EntityA,
+  repository: () => RepoA,
+  properties: {
+    id: { type: "number", primary: true, autoincrement: true },
+    a: { type: "string" },
+  },
+});
+
+class EntityB {
+  id!: number;
+  b!: string;
+}
+class RepoB extends EntityRepository<EntityB> {}
+const SchemaB = new EntitySchema<EntityB>({
+  class: EntityB,
+  repository: () => RepoB,
+  properties: {
+    id: { type: "number", primary: true, autoincrement: true },
+    b: { type: "string" },
+  },
+});
+
+let capturedRepos: { a?: RepoA; b?: RepoB } = {};
+
+@Module({ inject: [RepoA], imports: [MikroOrmModule.register([RepoA])] })
+class ModuleA {
+  constructor(a: RepoA) {
+    capturedRepos.a = a;
+  }
+}
+
+@Module({ inject: [RepoB], imports: [MikroOrmModule.register([RepoB])] })
+class ModuleB {
+  constructor(b: RepoB) {
+    capturedRepos.b = b;
+  }
+}
+
+const configureBoth = () =>
+  MikroOrmModule.configure({
+    driver: BetterSqliteDriver,
+    dbName: ":memory:",
+    entities: [SchemaA, SchemaB],
+  });
+
+describe("register() feature isolation (BUG 2)", () => {
+  it("each module resolves its own registered repository (connection still shared)", async () => {
+    capturedRepos = {};
+    const app = makeApp([configureBoth(), ModuleA, ModuleB]);
+
+    await app.init();
+    await app.start();
+
+    expect(capturedRepos.a).toBeInstanceOf(RepoA);
+    expect(capturedRepos.b).toBeInstanceOf(RepoB);
+
+    await app.stop();
+  });
+
+  it("a module CANNOT inject a repository another module registered", async () => {
+    // ModuleB registers RepoB in its own isolated node; this module imports only RepoA's registration
+    // but tries to inject RepoB — with isolation, RepoB must be an Unknown provider here.
+    @Module({ inject: [RepoB], imports: [MikroOrmModule.register([RepoA])] })
+    class LeakyModule {
+      constructor(_b: RepoB) {}
+    }
+
+    const app = makeApp([configureBoth(), ModuleB, LeakyModule]);
+
+    await expect(app.init()).rejects.toThrow(/Unknown provider/);
   });
 });

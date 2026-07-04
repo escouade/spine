@@ -4,6 +4,9 @@ import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { ClsService } from "@spinejs/cls";
 import type { Logger } from "@spinejs/core";
 import { mikroOrmProvider } from "./mikro-orm.module";
+import { SpineMikroLogger } from "./mikro-orm.logger";
+
+const ESC = String.fromCharCode(27); // ANSI escape introducer, e.g. `${ESC}[31m` … `${ESC}[39m`
 
 class Note {
   id!: number;
@@ -48,7 +51,7 @@ const baseOptions = () => ({
 });
 
 describe("MikroORM logging bridge (Story 1.5)", () => {
-  it("routes MikroORM log output through the injected spine logger (one sink)", async () => {
+  it("routes MikroORM log output through the injected spine logger (one sink), ANSI-stripped", async () => {
     const { logger, calls } = makeFakeLogger();
     const orm = mikroOrmProvider.factory(
       new ClsService(),
@@ -72,12 +75,14 @@ describe("MikroORM logging bridge (Story 1.5)", () => {
     expect(
       debug.some((m) => /insert|select|begin|commit|discovery/i.test(m))
     ).toBe(true);
+    // No ANSI color escape codes leak into the structured logger.
+    expect(calls.every((c) => !c.message.includes(ESC))).toBe(true);
   });
 
   it("does not crash when no logger is available (graceful degradation)", async () => {
     const orm = mikroOrmProvider.factory(
       new ClsService(),
-      baseOptions(),
+      { ...baseOptions(), debug: false },
       undefined
     );
     await orm.connect();
@@ -107,5 +112,59 @@ describe("MikroORM logging bridge (Story 1.5)", () => {
 
     expect(userLines.length).toBeGreaterThan(0); // MikroORM logged to the user's sink…
     expect(calls.filter((c) => c.level === "debug").length).toBe(0); // …not the spine bridge
+  });
+});
+
+// BUG 4 & 5: the bridge must map severity (not collapse everything to debug) and strip ANSI, and must
+// surface ORM errors/warnings even when `debug` is off. Tested on the shipped SpineMikroLogger directly.
+describe("SpineMikroLogger severity mapping + ANSI stripping (BUG 4/5)", () => {
+  it("routes an ORM error to the spine ERROR path (not debug), even with debug disabled, ANSI stripped", () => {
+    const { logger, calls } = makeFakeLogger();
+    const bridge = new SpineMikroLogger(
+      { writer: () => {}, debugMode: false },
+      logger
+    );
+
+    bridge.error("query", `${ESC}[31mconnection refused${ESC}[39m`);
+
+    const errors = calls.filter((c) => c.level === "error");
+    expect(errors.length).toBe(1);
+    expect(errors[0].message).toContain("connection refused");
+    expect(errors[0].message).not.toContain(ESC);
+    // It surfaced as an error even though debug is off, and was NOT downgraded to debug.
+    expect(calls.filter((c) => c.level === "debug").length).toBe(0);
+  });
+
+  it("routes an ORM warning to the spine WARN path, even with debug disabled", () => {
+    const { logger, calls } = makeFakeLogger();
+    const bridge = new SpineMikroLogger(
+      { writer: () => {}, debugMode: false },
+      logger
+    );
+
+    bridge.warn("deprecated", `${ESC}[33muse of a deprecated API${ESC}[39m`);
+
+    const warns = calls.filter((c) => c.level === "warn");
+    expect(warns.length).toBe(1);
+    expect(warns[0].message).toContain("use of a deprecated API");
+    expect(warns[0].message).not.toContain(ESC);
+  });
+
+  it("gates general/query output on debug: suppressed when off, routed to debug when on", () => {
+    const { logger, calls } = makeFakeLogger();
+    const bridge = new SpineMikroLogger(
+      { writer: () => {}, debugMode: false },
+      logger
+    );
+
+    bridge.log("query", "select 1"); // debug off → suppressed
+    expect(calls.length).toBe(0);
+
+    bridge.setDebugMode(true);
+    bridge.log("query", `${ESC}[36mselect 1${ESC}[39m`); // debug on → routed to debug, ANSI stripped
+    const debug = calls.filter((c) => c.level === "debug");
+    expect(debug.length).toBe(1);
+    expect(debug[0].message).toContain("select 1");
+    expect(debug[0].message).not.toContain(ESC);
   });
 });
