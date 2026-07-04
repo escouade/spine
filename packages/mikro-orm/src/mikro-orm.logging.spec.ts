@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { EntitySchema } from "@mikro-orm/core";
+import { EntitySchema, type LogContext } from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { ClsService } from "@spinejs/cls";
 import type { Logger } from "@spinejs/core";
@@ -166,5 +166,24 @@ describe("SpineMikroLogger severity mapping + ANSI stripping (BUG 4/5)", () => {
     expect(debug.length).toBe(1);
     expect(debug[0].message).toContain("select 1");
     expect(debug[0].message).not.toContain(ESC);
+  });
+
+  // Regression: MikroORM funnels some errors/warnings through log(ns, msg, { level }) — not only via
+  // error()/warn(). The debug gate must NOT run before the severity mapping, or these are dropped.
+  it("surfaces an error/warning arriving via log() with a level, even when debug is off", () => {
+    const { logger, calls } = makeFakeLogger();
+    const bridge = new SpineMikroLogger(
+      { writer: () => {}, debugMode: false },
+      logger
+    );
+
+    bridge.log("query", "constraint failed", { level: "error" } as LogContext);
+    bridge.log("query", "deprecated option", {
+      level: "warning",
+    } as LogContext);
+
+    expect(calls.filter((c) => c.level === "error").length).toBe(1);
+    expect(calls.filter((c) => c.level === "warn").length).toBe(1);
+    expect(calls.filter((c) => c.level === "debug").length).toBe(0);
   });
 });

@@ -47,14 +47,16 @@ export class SpineMikroLogger extends DefaultLogger {
     message: string,
     context?: LogContext
   ): void {
-    // Respect MikroORM's namespace/debug gating for general + query output.
-    if (!this.isEnabled(namespace, context)) return;
     const level =
       context?.level === "error"
         ? "error"
         : context?.level === "warning"
         ? "warn"
         : "debug";
+    // Errors and warnings surface regardless of `debug`; only debug-level (query/info/discovery)
+    // output respects MikroORM's namespace/debug gate. Gating first would drop a level-tagged
+    // warning/error routed through `log()` when debug is off — contradicting this class's contract.
+    if (level === "debug" && !this.isEnabled(namespace, context)) return;
     this.forward(level, namespace, message);
   }
 

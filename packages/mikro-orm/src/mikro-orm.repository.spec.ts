@@ -187,4 +187,48 @@ describe("MikroOrmModule.register + repositoryOf (Story 1.4)", () => {
       /no entity declares/
     );
   });
+
+  // BUG (E1): getAll() order is not contractual — if two entities declare the SAME repository, the
+  // reverse-map would silently bind to an arbitrary one (wrong table). Fail loud on the ambiguity.
+  it("entityForRepository throws when two entities declare the same repository", async () => {
+    class A {
+      id!: number;
+    }
+    class B {
+      id!: number;
+    }
+    class SharedRepo extends EntityRepository<A> {}
+    const ASchema = new EntitySchema<A>({
+      class: A,
+      repository: () => SharedRepo,
+      properties: {
+        id: { type: "number", primary: true, autoincrement: true },
+      },
+    });
+    const BSchema = new EntitySchema<B>({
+      class: B,
+      repository: (() => SharedRepo) as never,
+      properties: {
+        id: { type: "number", primary: true, autoincrement: true },
+      },
+    });
+
+    const orm2 = mikroOrmProvider.factory(
+      new ClsService(),
+      {
+        driver: BetterSqliteDriver,
+        dbName: ":memory:",
+        entities: [ASchema, BSchema],
+      },
+      undefined
+    );
+    await orm2.connect();
+    try {
+      expect(() => entityForRepository(orm2, SharedRepo)).toThrow(
+        /exactly one entity/
+      );
+    } finally {
+      await orm2.close(true);
+    }
+  });
 });

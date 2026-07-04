@@ -205,20 +205,21 @@ L'interceptor est tout le différenciateur, et il est petit :
 ```typescript
 const em = this.orm.em.fork(); // identity map + unité de travail neuves pour CETTE requête
 this.cls.set(EM, em); // tout repository/EntityManager injecté résout désormais vers lui
-await em.begin();
-try {
-  const res = await next(); // vos handlers + services s'exécutent ici
-  await em.commit(); // flush l'unité de travail, puis COMMIT — pas de .save() explicite
-  return res;
-} catch (e) {
-  await em.rollback(); // tout est jeté ; l'identity map meurt avec la requête
-  throw e; // l'erreur n'est jamais avalée — elle remonte à la gateway
+const res = await next(); // vos handlers + services s'exécutent ici
+// Le pipeline ne throw jamais : les erreurs métier reviennent en { ok: false }. On flush uniquement
+// une unité de travail réussie — MikroORM enveloppe les changements dans UNE transaction (atomique,
+// pas de .save()). Une requête qui n'a rien écrit ne flush rien (aucune transaction) ; une enveloppe
+// d'erreur ne persiste rien.
+if (res.ok) {
+  await em.flush();
 }
+return res;
 ```
 
 Pourquoi il n'y a pas de `.save()` : MikroORM a une **unité de travail** et une **identity map**.
 Quand vous chargez une entité via l'`EntityManager` de la requête, l'ORM la suit ; modifier un champ
-la marque comme sale ; `commit()` flush tous les changements suivis dans une seule transaction.
+la marque comme sale ; le `flush()` de fin de requête écrit tous les changements suivis dans une seule
+transaction — et une requête qui n'a rien changé n'ouvre aucune transaction.
 `fork()` donne à chaque requête sa propre identity map, donc deux requêtes concurrentes ne voient
 jamais les écritures en attente l'une de l'autre — le fork est lié au contexte asynchrone (CLS), pas
 au singleton injecté.
@@ -352,7 +353,7 @@ const ormProvider: FactoryProvider<MikroORM> = {
     }),
 };
 
-// 2. Fork + encadrement de la transaction par dispatch (ce que fait MikroOrmInterceptor).
+// 2. Fork + flush de l'unité de travail par dispatch (ce que fait MikroOrmInterceptor).
 export class TransactionInterceptor implements GatewayInterceptor {
   constructor(
     private readonly orm: MikroORM,
@@ -366,15 +367,13 @@ export class TransactionInterceptor implements GatewayInterceptor {
   ): Promise<Envelope<unknown>> {
     const em = this.orm.em.fork();
     this.cls.set(EM, em);
-    await em.begin();
-    try {
-      const res = await next();
-      await em.commit();
-      return res;
-    } catch (e) {
-      await em.rollback();
-      throw e;
+    const res = await next();
+    // Le pipeline ne throw jamais : les erreurs métier sont { ok: false }. On flush uniquement un
+    // succès — atomique, sans .save() ; une requête sans écriture n'ouvre aucune transaction.
+    if (res.ok) {
+      await em.flush();
     }
+    return res;
   }
 }
 
@@ -452,10 +451,10 @@ fournit et l'injecte. À combiner avec `register([User])`.
 
 ### `MikroOrmInterceptor`
 
-L'interceptor transactionnel par requête. Fork un `EntityManager` neuf dans la portée CLS et encadre
-le dispatch (`begin` → `commit` en cas de succès, `rollback` + rethrow en cas d'erreur).
-Enregistrez-le dans le `configure({ interceptors })` du transport **après** `ClsInterceptor` — il doit
-s'exécuter à l'intérieur de la portée CLS.
+L'interceptor d'unité de travail par requête. Fork un `EntityManager` neuf dans la portée CLS et le
+`flush()` une fois à la fin, uniquement sur une enveloppe réussie (pas de `begin()` en amont ; une
+requête sans écriture n'ouvre aucune transaction). Enregistrez-le dans le `configure({ interceptors })`
+du transport **après** `ClsInterceptor` — il doit s'exécuter à l'intérieur de la portée CLS.
 
 ### Ré-exports et briques de la factory
 

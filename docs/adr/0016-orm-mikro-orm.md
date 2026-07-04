@@ -76,23 +76,28 @@ parallel ALS. The `context` callback replaces them with spine's.
 The CLS scope is opened once per dispatch by `ClsInterceptor` (ADR 0003). Inside it, a
 `MikroOrmInterceptor` (behind the same `GatewayInterceptor` hook, ADR 0002 — `packages/core` stays
 untouched) forks a fresh `EntityManager` — one identity map, one unit-of-work — stores it in CLS, and
-brackets the dispatch in a transaction:
+flushes it once at the end of the dispatch, on a successful envelope:
 
 ```ts
 async intercept(_route, _ctx, _input, next) {
   const em = this.orm.em.fork(); // fresh identity map + unit-of-work for this request
   this.cls.set(EM, em);
-  await em.begin();
-  try {
-    const res = await next();    // handlers + services run here; their em resolves to this fork
-    await em.commit();           // flush the unit-of-work, then COMMIT — no explicit .save()
-    return res;
-  } catch (e) {
-    await em.rollback();         // discard; the identity map dies with the scope
-    throw e;
+  const res = await next();      // handlers + services run here; their em resolves to this fork
+  // The pipeline never throws: business errors come back as { ok: false }. Flush only a successful
+  // envelope — flush() wraps the pending changes in ONE implicit transaction (atomic, no explicit
+  // .save()). A request that wrote nothing flushes nothing (no transaction opened); an error envelope
+  // persists nothing — nothing was ever flushed, so there is nothing to roll back. A failing flush
+  // throws out of here and the pipeline maps it to an error code.
+  if (res.ok) {
+    await em.flush();
   }
+  return res;
 }
 ```
+
+There is no up-front `begin()`: deferring to a single end-of-dispatch `flush()` keeps a write atomic
+(MikroORM wraps the pending changes in one transaction) while a read-only or DB-free dispatch opens no
+transaction and holds no pooled connection across its work.
 
 **Delegation nuance (proven by the spike, not assumed).** `orm.em` — the getter — is **always the
 root manager**. It does not itself become the request fork; instead every operation it exposes
@@ -195,9 +200,10 @@ Error handling is deliberately thin — the package **surfaces** failures, it do
 
 - **Connect failure** after the retry budget → `onStart` throws. ADR 0010 aborts the boot cleanly and
   the fatal is logged. The app does not start half-connected.
-- **Transaction failure** → the interceptor (§2) rolls back and **rethrows**. Nothing is swallowed;
-  the error propagates to the gateway's existing error path. A rollback may be debug-logged, but the
-  interceptor never converts an error into a silent no-op.
+- **Write failure** → the end-of-dispatch `flush()` (§2) throws; MikroORM auto-rolls-back its implicit
+  transaction, and the throw propagates to the gateway's existing error path (mapped to an error code).
+  A business error envelope is simply never flushed — nothing is persisted, nothing to roll back. Either
+  way the interceptor never converts a failure into a silent no-op.
 
 ### 6. The module is a documented factory, not magic
 
