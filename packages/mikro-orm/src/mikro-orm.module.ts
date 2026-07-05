@@ -336,23 +336,24 @@ export class MikroOrmModule implements OnStart, OnStop {
     // actionable error if it is absent). Otherwise the options object is passed through untouched, so a
     // connection that never migrates is byte-for-byte as before and pulls in no migrations dependency
     // (NFR-4). Reused by both the named and default connection paths below.
-    const resolvedOrmOptions: Options = ormOptions.migrations
-      ? {
-          ...ormOptions,
-          migrations: resolveMigrationsOptions(
-            ormOptions.migrations,
-            connectionName
-          ),
-          extensions: [
-            ...(ormOptions.extensions ?? []),
-            loadMigratorExtension(),
-          ],
-        }
-      : ormOptions;
-
-    // Fail closed at configure time if this connection's migrations would collide with another's
-    // (shared path, or shared physical DB + tracking table); warn on a shared physical DB (AD-6).
-    if (resolvedOrmOptions.migrations) {
+    let resolvedOrmOptions: Options = ormOptions;
+    if (ormOptions.migrations) {
+      const migrator = loadMigratorExtension();
+      const existingExtensions = ormOptions.extensions ?? [];
+      resolvedOrmOptions = {
+        ...ormOptions,
+        migrations: resolveMigrationsOptions(
+          ormOptions.migrations,
+          connectionName
+        ),
+        // Don't append the Migrator twice if the app already lists it in `extensions` (require caches
+        // the module, so it is the same class reference).
+        extensions: existingExtensions.includes(migrator)
+          ? existingExtensions
+          : [...existingExtensions, migrator],
+      };
+      // Fail closed at configure time if this connection's migrations would collide with another's
+      // (shared path, or shared physical DB + tracking table); warn on a shared physical DB (AD-6).
       registerMigrationConnection(connectionName, resolvedOrmOptions);
     }
 

@@ -21,14 +21,33 @@ const requireFrom = createRequire(import.meta.url);
 export function loadMigratorExtension(
   req: NodeRequire = requireFrom
 ): NonNullable<Options["extensions"]>[number] {
+  let mod: { Migrator?: unknown };
   try {
-    return (req("@mikro-orm/migrations") as { Migrator: unknown })
-      .Migrator as NonNullable<Options["extensions"]>[number];
-  } catch {
+    mod = req("@mikro-orm/migrations") as { Migrator?: unknown };
+  } catch (err) {
+    // Only remap a genuine "the package isn't installed" failure to the install hint. Any other error
+    // — a version-skew throw at import, a corrupt install, a *transitive* module not found — must
+    // surface as-is, or the developer chases a phantom reinstall of an already-present package.
+    const e = err as { code?: string; message?: string };
+    const notFound =
+      e?.code === "MODULE_NOT_FOUND" ||
+      /cannot find module/i.test(String(e?.message));
+    if (notFound && /@mikro-orm\/migrations/.test(String(e?.message))) {
+      throw new Error(
+        "@spinejs/mikro-orm: a `migrations` block is configured but the optional peer dependency " +
+          "`@mikro-orm/migrations` is not installed. Install it at the same major as `@mikro-orm/core` " +
+          "(`@mikro-orm/migrations@^6`) — e.g. `npm i -D @mikro-orm/migrations@^6`."
+      );
+    }
+    throw err;
+  }
+  // The package resolved but is missing the expected export (e.g. a mismatched major) — fail loudly
+  // rather than pushing `undefined` into `extensions` and deferring a confusing error.
+  if (!mod?.Migrator) {
     throw new Error(
-      "@spinejs/mikro-orm: a `migrations` block is configured but the optional peer dependency " +
-        "`@mikro-orm/migrations` is not installed. Install it at the same major as `@mikro-orm/core` " +
-        "(`@mikro-orm/migrations@^6`) — e.g. `npm i -D @mikro-orm/migrations@^6`."
+      "@spinejs/mikro-orm: `@mikro-orm/migrations` resolved but did not export `Migrator`. Ensure it " +
+        "matches your `@mikro-orm/core` major (`@mikro-orm/migrations@^6`)."
     );
   }
+  return mod.Migrator as NonNullable<Options["extensions"]>[number];
 }

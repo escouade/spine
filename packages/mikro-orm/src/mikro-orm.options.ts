@@ -147,11 +147,18 @@ export const resolveMigrationsOptions = (
   connectionName: string = DEFAULT_CONNECTION
 ): Options["migrations"] => {
   if (migrations === undefined) return undefined;
+  // Drop present-but-`undefined` keys (e.g. `{ snapshot: cfg.snapshot }` where the value is absent) so
+  // they don't overwrite a Spine default with `undefined` — "defaults apply unless explicitly set".
+  const explicit = Object.fromEntries(
+    Object.entries(migrations).filter(([, value]) => value !== undefined)
+  ) as MigrationsOptions;
   const merged: MigrationsOptions = {
     ...SPINE_MIGRATION_DEFAULTS,
-    ...migrations,
+    ...explicit,
   };
-  if (connectionName !== DEFAULT_CONNECTION && merged.path === undefined) {
+  // Namespace a named connection's folder when it gave no (or an empty) explicit path — `!merged.path`
+  // also catches `""`, which would otherwise resolve to the process cwd rather than a per-name folder.
+  if (connectionName !== DEFAULT_CONNECTION && !merged.path) {
     return { ...merged, path: `./migrations/${connectionName}` };
   }
   return merged;

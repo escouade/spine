@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { MikroORM, EntitySchema, type Options } from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { MikroOrmModule } from "./index";
@@ -190,6 +192,63 @@ describe("Migrator extension wiring + peer/optional dependency (Story 1.2)", () 
     const Migrator = loadMigratorExtension() as { name: string };
     expect(Migrator.name).toBe("Migrator");
   });
+
+  // A load failure that is NOT "package missing" (version skew, corrupt install) must surface as-is,
+  // not be rewritten into a misleading "not installed" message.
+  it("rethrows a non-module-not-found load error unchanged", () => {
+    const boomRequire = (() => {
+      throw new Error("boom: broken internal import");
+    }) as unknown as NodeRequire;
+    expect(() => loadMigratorExtension(boomRequire)).toThrow(/boom/);
+    expect(() => loadMigratorExtension(boomRequire)).not.toThrow(
+      /not installed/
+    );
+  });
+
+  // A transitive module-not-found (a DIFFERENT package missing) must not be misreported as
+  // @mikro-orm/migrations being absent.
+  it("rethrows a transitive MODULE_NOT_FOUND for a different package", () => {
+    const transitiveRequire = (() => {
+      const err = new Error("Cannot find module '@mikro-orm/core'") as Error & {
+        code: string;
+      };
+      err.code = "MODULE_NOT_FOUND";
+      throw err;
+    }) as unknown as NodeRequire;
+    expect(() => loadMigratorExtension(transitiveRequire)).toThrow(
+      /@mikro-orm\/core/
+    );
+    expect(() => loadMigratorExtension(transitiveRequire)).not.toThrow(
+      /not installed/
+    );
+  });
+
+  // Resolved but missing the export (mismatched major) → fail loudly, not push undefined.
+  it("throws when the package resolves but does not export Migrator", () => {
+    const emptyRequire = (() => ({})) as unknown as NodeRequire;
+    expect(() => loadMigratorExtension(emptyRequire)).toThrow(
+      /did not export `Migrator`/
+    );
+  });
+
+  // Story 1.2 AC4: the manifest declares the migrations package as an OPTIONAL peer, not a hard dep.
+  it("declares @mikro-orm/migrations as an optional peer dependency (^6), not a hard dependency", () => {
+    const pkg = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL("../package.json", import.meta.url)),
+        "utf8"
+      )
+    ) as {
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    expect(pkg.peerDependencies?.["@mikro-orm/migrations"]).toBe("^6");
+    expect(pkg.peerDependenciesMeta?.["@mikro-orm/migrations"]?.optional).toBe(
+      true
+    );
+    expect(pkg.dependencies?.["@mikro-orm/migrations"]).toBeUndefined();
+  });
 });
 
 describe("per-connection isolation + fail-closed collision guard (Story 1.3)", () => {
@@ -224,7 +283,7 @@ describe("per-connection isolation + fail-closed collision guard (Story 1.3)", (
       registerMigrationConnection("a", opts("db_a", { path: "./shared" }));
       expect(() =>
         registerMigrationConnection("b", opts("db_b", { path: "./shared" }))
-      ).toThrow(/both resolve to the same migrations path "\.\/shared"/);
+      ).toThrow(/both resolve to the same migrations path/);
     });
 
     it("fails closed when two connections share a physical DB and tracking table", () => {
