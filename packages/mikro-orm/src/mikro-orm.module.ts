@@ -18,6 +18,7 @@ import { ClsModule, ClsService } from "@spinejs/cls";
 import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
 import { SpineMikroLogger } from "./mikro-orm.logger";
 import { loadMigratorExtension } from "./mikro-orm.migrator";
+import { registerMigrationConnection } from "./mikro-orm.migrations-registry";
 import {
   entityForRepository,
   isRepositoryClass,
@@ -328,21 +329,32 @@ export class MikroOrmModule implements OnStart, OnStop {
   static configure(options: MikroOrmModuleOptions): DynamicModule {
     const { retry, name, multiWrite = false, ...ormOptions } = options;
     const resolvedRetry: RetryPolicy = { ...DEFAULT_RETRY, ...retry };
-    // When (and only when) a `migrations` block is declared, apply the Spine migration defaults and
-    // register the `Migrator` extension on this connection (loaded from the optional peer
-    // `@mikro-orm/migrations`, failing closed with an actionable error if it is absent). Otherwise the
-    // options object is passed through untouched, so a connection that never migrates is byte-for-byte
-    // as before and pulls in no migrations dependency (NFR-4). Reused by both connection paths below.
+    const connectionName = name ?? DEFAULT_CONNECTION;
+    // When (and only when) a `migrations` block is declared, apply the Spine migration defaults (with a
+    // named connection's folder namespaced by name) and register the `Migrator` extension on this
+    // connection (loaded from the optional peer `@mikro-orm/migrations`, failing closed with an
+    // actionable error if it is absent). Otherwise the options object is passed through untouched, so a
+    // connection that never migrates is byte-for-byte as before and pulls in no migrations dependency
+    // (NFR-4). Reused by both the named and default connection paths below.
     const resolvedOrmOptions: Options = ormOptions.migrations
       ? {
           ...ormOptions,
-          migrations: resolveMigrationsOptions(ormOptions.migrations),
+          migrations: resolveMigrationsOptions(
+            ormOptions.migrations,
+            connectionName
+          ),
           extensions: [
             ...(ormOptions.extensions ?? []),
             loadMigratorExtension(),
           ],
         }
       : ormOptions;
+
+    // Fail closed at configure time if this connection's migrations would collide with another's
+    // (shared path, or shared physical DB + tracking table); warn on a shared physical DB (AD-6).
+    if (resolvedOrmOptions.migrations) {
+      registerMigrationConnection(connectionName, resolvedOrmOptions);
+    }
 
     // Named connection: its own `fresh` node (memoized by name), tokens, lifecycle + retry, interceptor.
     if (name !== undefined && name !== DEFAULT_CONNECTION) {
