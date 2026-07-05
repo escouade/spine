@@ -1,7 +1,10 @@
 import type { ModuleEntry } from "@spinejs/core";
-import type { GatewayInterceptor } from "@spinejs/gateway-core";
 import { ClsInterceptor, ClsModule, ClsService } from "@spinejs/cls";
-import { MikroOrmModule, MikroOrmInterceptor } from "@spinejs/mikro-orm";
+import {
+  MikroOrmModule,
+  MikroOrmInterceptor,
+  asInterceptor,
+} from "@spinejs/mikro-orm";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import {
   ElectronIpcGatewayModule,
@@ -34,13 +37,9 @@ export const modules: ModuleEntry[] = [
       factory: (cls: ClsService, orm: MikroOrmInterceptor) => [
         new ClsInterceptor<ElectronIpcBaseContext>(cls), // 1. outermost: opens the CLS scope
         // 2. inside the scope: forks the EM + brackets the transaction. MikroOrmInterceptor is
-        // transport-agnostic (a GatewayInterceptor<GatewayContext> — it only touches CLS, never the
-        // ctx or route), so we assert it into this transport's typed interceptor slot.
-        orm as unknown as GatewayInterceptor<
-          ElectronIpcBaseContext,
-          string,
-          IpcRoute
-        >,
+        // transport-agnostic (it only touches CLS, never the ctx or route), so `asInterceptor` types
+        // it into this transport's narrowed interceptor slot without a hand-written cast.
+        asInterceptor<ElectronIpcBaseContext, string, IpcRoute>(orm),
       ],
     },
   }),
