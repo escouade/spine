@@ -90,7 +90,8 @@ function buildOperation(
   route: HttpRoute,
   converter: SchemaConverter
 ): JsonValue {
-  const meta = route.meta as HttpRouteMeta;
+  const meta = (route.meta ?? {}) as HttpRouteMeta;
+  const inputs = meta.inputs ?? {};
   const { method, path } = route.address;
   const op: { [key: string]: JsonValue } = {};
 
@@ -103,15 +104,17 @@ function buildOperation(
   op.operationId = meta.operationId ?? deriveOperationId(method, path);
   if (meta.deprecated !== undefined) op.deprecated = meta.deprecated;
 
-  const parameters = buildParameters(meta, converter);
+  const parameters = buildParameters(path, inputs, converter);
   if (parameters.length > 0) op.parameters = parameters;
 
-  if (meta.inputs.body) {
+  if (inputs.body) {
     op.requestBody = {
       required: true,
       content: {
         "application/json": {
-          schema: converter.toJsonSchema(meta.inputs.body, { io: "input" }),
+          schema: sanitizeFragment(
+            converter.toJsonSchema(inputs.body, { io: "input" })
+          ),
         },
       },
     };
@@ -126,50 +129,110 @@ function buildOperation(
 }
 
 /**
- * Decompose the `params`/`query` object schemas into individual OpenAPI parameter objects: one per
- * property of the converted object fragment. Path params are always `required`; query params are
- * required iff the property is in the fragment's `required` list.
+ * Build the operation's parameters. **Path** parameters are driven by the path template tokens (every
+ * `{param}` must be declared as `required`), taking the property schema from `params` when present and
+ * defaulting to `string` otherwise — so a `:param` route is never emitted with an undeclared path
+ * variable, even when the author supplies no `params` schema. **Query** parameters are decomposed from
+ * the `query` object schema, required iff the property is in the fragment's `required` list.
  */
 function buildParameters(
-  meta: HttpRouteMeta,
+  path: string,
+  inputs: HttpRouteMeta["inputs"],
   converter: SchemaConverter
 ): JsonValue[] {
   const parameters: JsonValue[] = [];
-  if (meta.inputs.params) {
-    const fragment = converter.toJsonSchema(meta.inputs.params, {
-      io: "input",
+
+  const paramProps = inputs.params
+    ? ((sanitizeFragment(converter.toJsonSchema(inputs.params, { io: "input" }))
+        .properties ?? {}) as { [name: string]: JsonValue })
+    : {};
+  for (const name of pathTemplateParams(path)) {
+    parameters.push({
+      name,
+      in: "path",
+      required: true,
+      schema: paramProps[name] ?? { type: "string" },
     });
-    parameters.push(...decomposeParameters(fragment, "path"));
   }
-  if (meta.inputs.query) {
-    const fragment = converter.toJsonSchema(meta.inputs.query, { io: "input" });
-    parameters.push(...decomposeParameters(fragment, "query"));
+
+  if (inputs.query) {
+    const fragment = sanitizeFragment(
+      converter.toJsonSchema(inputs.query, { io: "input" })
+    );
+    parameters.push(...decomposeQueryParameters(fragment));
   }
+
   return parameters;
 }
 
-function decomposeParameters(
-  fragment: JsonSchemaObject,
-  location: "path" | "query"
-): JsonValue[] {
+/** Decompose a `query` object fragment into one query parameter per property (sorted for AD-6). */
+function decomposeQueryParameters(fragment: JsonSchemaObject): JsonValue[] {
   const properties = (fragment.properties ?? {}) as {
     [name: string]: JsonValue;
   };
   const required = Array.isArray(fragment.required)
     ? (fragment.required as string[])
     : [];
-  // Path params keep property (declaration) order; query params are sorted for determinism (AD-6).
-  const names =
-    location === "path"
-      ? Object.keys(properties)
-      : Object.keys(properties).sort();
+  return Object.keys(properties)
+    .sort()
+    .map((name) => ({
+      name,
+      in: "query",
+      required: required.includes(name),
+      schema: properties[name],
+    }));
+}
 
-  return names.map((name) => ({
-    name,
-    in: location,
-    required: location === "path" ? true : required.includes(name),
-    schema: properties[name],
-  }));
+/** Path template variables, in declaration order, from a spine `:param` path. */
+function pathTemplateParams(path: string): string[] {
+  const names: string[] = [];
+  const pattern = /:([A-Za-z0-9_]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(path)) !== null) names.push(match[1]);
+  return names;
+}
+
+/**
+ * Make a converter fragment self-contained and OpenAPI-safe before it is emitted inline: strip the
+ * `$schema` dialect marker (the converter's contract assigns stripping to the builder) and inline any
+ * local `#/$defs/*` `$ref` (the reused-schema strategy — relocating them to `components/schemas` is
+ * Story 1.4). A cyclic `$defs` is kept in place (valid draft-2020-12) so no `$ref` ever dangles.
+ */
+function sanitizeFragment(fragment: JsonSchemaObject): JsonSchemaObject {
+  const rawDefs = fragment.$defs;
+  const defs =
+    rawDefs !== null && typeof rawDefs === "object" && !Array.isArray(rawDefs)
+      ? (rawDefs as { [name: string]: JsonValue })
+      : {};
+  let cyclic = false;
+
+  const resolve = (value: JsonValue, stack: Set<string>): JsonValue => {
+    if (Array.isArray(value)) return value.map((item) => resolve(item, stack));
+    if (value !== null && typeof value === "object") {
+      const ref = (value as { [key: string]: JsonValue }).$ref;
+      if (typeof ref === "string" && ref.startsWith("#/$defs/")) {
+        const name = ref.slice("#/$defs/".length);
+        if (stack.has(name)) {
+          cyclic = true;
+          return value;
+        }
+        const target = defs[name];
+        if (target === undefined) return value;
+        return resolve(target, new Set(stack).add(name));
+      }
+      const out: { [key: string]: JsonValue } = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (key === "$schema" || key === "$defs") continue;
+        out[key] = resolve(item, stack);
+      }
+      return out;
+    }
+    return value;
+  };
+
+  const resolved = resolve(fragment, new Set()) as JsonSchemaObject;
+  if (cyclic) resolved.$defs = defs;
+  return resolved;
 }
 
 /** Convert a spine (Hono) path `/things/:id` to an OpenAPI path `/things/{id}`. */
@@ -194,6 +257,11 @@ function deriveOperationId(method: HttpMethod, path: string): string {
   return method.toLowerCase() + segments.join("");
 }
 
+/** PascalCase a path segment, dropping non-alphanumerics so the operationId stays a clean identifier. */
 function pascalCase(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
+  return value
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join("");
 }

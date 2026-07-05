@@ -53,6 +53,8 @@ class UsersController {
       tags: ["users"],
       operationId: "findUser",
       deprecated: true,
+      // Author supplies examples — the builder must NOT surface them at operation level (Story 1.5).
+      examples: { sample: { value: { id: "1" } } },
     },
     () => ({ ok: true })
   );
