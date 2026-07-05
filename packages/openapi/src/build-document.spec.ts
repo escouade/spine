@@ -257,6 +257,18 @@ describe("buildOpenApiDocument", () => {
     expect(payload.discriminator).toEqual({ propertyName: "kind" });
   });
 
+  it('rewrites a recursive body\'s `$ref: "#"` to its own component, never a bare self-ref', () => {
+    const doc = build();
+    // No document-root self-reference survives anywhere in the emitted document.
+    expect(JSON.stringify(doc)).not.toContain('"$ref":"#"');
+    const category = components(doc).PostCategories_Body as {
+      properties: { children: { items: { $ref?: string } } };
+    };
+    expect(category.properties.children.items.$ref).toBe(
+      "#/components/schemas/PostCategories_Body"
+    );
+  });
+
   it("emits components in sorted key order (AD-6)", () => {
     const doc = build();
     const keys = Object.keys(components(doc));
