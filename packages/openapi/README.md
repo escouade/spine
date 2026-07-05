@@ -49,5 +49,5 @@ Schemas **must** be authored with the `zod/v4` surface (the one that carries
 - Reused schemas are hoisted to `$defs` and referenced with `$ref`. Relocating
   them to `components/schemas` is the document builder's job, not the adapter's.
 
-`zod` is pinned exact (`3.25.76`): `z.toJSONSchema` output is version-sensitive
-and a shape-guard test locks it.
+`zod` is pinned exact (`3.25.76`) because `z.toJSONSchema` output is
+version-sensitive.

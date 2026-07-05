@@ -39,6 +39,14 @@ export class ZodSchemaConverter implements SchemaConverter {
     this.warn = options.warn ?? ((message) => console.warn(message));
   }
 
+  /**
+   * Convert a schema to an OpenAPI-3.1 (draft-2020-12) JSON Schema fragment.
+   *
+   * `opts.io` picks the projection of a transform-bearing schema: `"input"` for
+   * request bodies/params, `"output"` for responses (FR-C6). **Omitted →
+   * `"output"`** (zod's default) — a caller documenting a *request* must pass
+   * `io: "input"` explicitly, otherwise defaulted fields project as required.
+   */
   toJsonSchema(
     schema: ParseableSchema<unknown>,
     opts?: { io?: "input" | "output" }
@@ -81,6 +89,13 @@ export class ZodSchemaConverter implements SchemaConverter {
     }
     if (type === "bigint") {
       node.type = "string";
+      return;
+    }
+
+    // `any`/`unknown` legitimately convert to an open schema `{}` — that IS their
+    // correct JSON Schema, not a fallback — so they must not trip the warning
+    // (also covers `z.record(k, z.unknown())`, a common idiom).
+    if (type === "any" || type === "unknown") {
       return;
     }
 

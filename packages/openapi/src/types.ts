@@ -26,7 +26,12 @@ export interface OpenApiTag {
 
 export interface OpenApiComponents {
   schemas?: { [name: string]: JsonSchemaObject };
-  securitySchemes?: { [name: string]: JsonSchemaObject };
+  /**
+   * Security-scheme objects (e.g. `{ type: "http", scheme: "bearer" }`) — these
+   * are OpenAPI objects, NOT JSON Schemas, so they are typed as plain JSON-safe
+   * objects. The builder (Story 1.7) refines the shape.
+   */
+  securitySchemes?: { [name: string]: { [key: string]: JsonValue } };
 }
 
 export interface OpenApiDocument {
