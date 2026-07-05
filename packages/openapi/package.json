@@ -1,0 +1,55 @@
+{
+  "name": "@spinejs/openapi",
+  "version": "0.1.0",
+  "description": "Automatic OpenAPI 3.1 generation from SpineJS HTTP route markers, with self-hosted Swagger UI.",
+  "keywords": [
+    "spinejs",
+    "openapi",
+    "swagger",
+    "json-schema",
+    "zod",
+    "documentation"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/escouade/spine.git",
+    "directory": "packages/openapi"
+  },
+  "homepage": "https://github.com/escouade/spine/tree/main/packages/openapi#readme",
+  "bugs": "https://github.com/escouade/spine/issues",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepack": "node ../../scripts/ensure-yarn-pack.cjs"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        },
+        "require": {
+          "types": "./dist/index.d.cts",
+          "default": "./dist/index.cjs"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@spinejs/gateway-core": "workspace:^",
+    "@spinejs/http-gateway": "workspace:^",
+    "zod": "3.25.76"
+  }
+}
