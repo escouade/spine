@@ -106,6 +106,45 @@ export const DEFAULT_RETRY: RetryPolicy = {
 };
 
 /**
+ * The `migrations` options a developer may declare on a connection — a curated view of MikroORM's own
+ * `Options["migrations"]` (path, tableName, snapshot, transactional, allOrNothing, emit,
+ * disableForeignKeys, …). Declaring it opts the connection into schema migrations (the Migrator
+ * extension is wired on that connection's `MikroORM`); omitting it leaves the connection byte-for-byte
+ * unchanged and pulls in no migrations dependency.
+ */
+export type MigrationsOptions = NonNullable<Options["migrations"]>;
+
+/**
+ * Spine-opinionated migration defaults (FR-2): entity-first, safe-by-default. TypeScript migration
+ * classes; a committed schema snapshot; and full rollback on failure — `transactional` + `allOrNothing`
+ * are both valid on the supported drivers (sqlite + postgres are transactional-DDL). Applied under any
+ * key the developer sets, so an explicit value always wins.
+ *
+ * Note the one conditional path: the SQLite `disableForeignKeys` × `transactional` table-rebuild
+ * interaction. These defaults never *enable* `disableForeignKeys` (it stays the developer's explicit,
+ * documented choice), so they never silently emit a migration broken under that interaction — the
+ * caveat lives in the docs.
+ */
+export const SPINE_MIGRATION_DEFAULTS = {
+  emit: "ts",
+  snapshot: true,
+  transactional: true,
+  allOrNothing: true,
+} satisfies MigrationsOptions;
+
+/**
+ * Merges the Spine migration defaults under a connection's `migrations` block (explicit keys win).
+ * Returns `undefined` unchanged when no block is declared — so a connection that never configures
+ * migrations has **no** `migrations` key injected and stays byte-for-byte as today (NFR-4).
+ */
+export const resolveMigrationsOptions = (
+  migrations: Options["migrations"]
+): Options["migrations"] =>
+  migrations === undefined
+    ? undefined
+    : { ...SPINE_MIGRATION_DEFAULTS, ...migrations };
+
+/**
  * Options for `MikroOrmModule.configure()`: the full MikroORM `Options` (driver, `dbName`, `entities`,
  * pool, …) plus an optional startup `retry` policy. Any field omitted from `retry` falls back to
  * {@link DEFAULT_RETRY}.
@@ -116,6 +155,9 @@ export const DEFAULT_RETRY: RetryPolicy = {
  * - `multiWrite` — allow this connection to be written in a request that already wrote another
  *   connection. Off by default: a second dirty connection throws (cross-DB writes have no atomicity).
  *   Opting in gives **best-effort sequential** flush — a mid-sequence failure strands earlier commits.
+ *
+ * The inherited `migrations` field (see {@link MigrationsOptions}) opts the connection into schema
+ * migrations; {@link SPINE_MIGRATION_DEFAULTS} are applied to it at configure time.
  */
 export type MikroOrmModuleOptions = Options & {
   retry?: Partial<RetryPolicy>;

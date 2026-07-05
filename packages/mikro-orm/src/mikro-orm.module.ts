@@ -32,6 +32,7 @@ import {
   mikroOrmInterceptorRef,
   mikroOrmOptionsToken,
   mikroOrmRef,
+  resolveMigrationsOptions,
   retryPolicyToken,
   type MikroOrmModuleOptions,
   type RetryPolicy,
@@ -326,6 +327,15 @@ export class MikroOrmModule implements OnStart, OnStop {
   static configure(options: MikroOrmModuleOptions): DynamicModule {
     const { retry, name, multiWrite = false, ...ormOptions } = options;
     const resolvedRetry: RetryPolicy = { ...DEFAULT_RETRY, ...retry };
+    // Apply the Spine migration defaults when (and only when) a `migrations` block is declared —
+    // otherwise the options object is passed through untouched, so a connection that never migrates is
+    // byte-for-byte as before (NFR-4). Reused by both the named and default connection paths below.
+    const resolvedOrmOptions: Options = ormOptions.migrations
+      ? {
+          ...ormOptions,
+          migrations: resolveMigrationsOptions(ormOptions.migrations),
+        }
+      : ormOptions;
 
     // Named connection: its own `fresh` node (memoized by name), tokens, lifecycle + retry, interceptor.
     if (name !== undefined && name !== DEFAULT_CONNECTION) {
@@ -337,7 +347,7 @@ export class MikroOrmModule implements OnStart, OnStop {
           provide: ormRef,
           inject: [ClsService, loggerToken],
           factory: (cls: ClsService, log?: Logger) =>
-            ormFactory(name)(cls, ormOptions, log),
+            ormFactory(name)(cls, resolvedOrmOptions, log),
         },
         {
           provide: entityManagerRef(name),
@@ -374,7 +384,7 @@ export class MikroOrmModule implements OnStart, OnStop {
       // both read/write — the same singleton the app's `ClsInterceptor` opens scopes on.
       imports: [ClsModule],
       providers: [
-        { provide: mikroOrmOptionsToken, value: ormOptions },
+        { provide: mikroOrmOptionsToken, value: resolvedOrmOptions },
         { provide: retryPolicyToken, value: resolvedRetry },
         mikroOrmProvider,
         entityManagerProvider,

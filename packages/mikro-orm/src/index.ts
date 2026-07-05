@@ -16,11 +16,17 @@ export type {
 export {
   DEFAULT_RETRY,
   DEFAULT_CONNECTION,
+  SPINE_MIGRATION_DEFAULTS,
+  resolveMigrationsOptions,
   mikroOrmRef,
   entityManagerRef,
   mikroOrmInterceptorRef,
 } from "./mikro-orm.options";
-export type { MikroOrmModuleOptions, RetryPolicy } from "./mikro-orm.options";
+export type {
+  MikroOrmModuleOptions,
+  MigrationsOptions,
+  RetryPolicy,
+} from "./mikro-orm.options";
 
 // Re-export the MikroORM primitives a consumer needs (entity/repository/manager), so an app can define
 // entities and inject the manager depending on @spinejs/mikro-orm alone. Identity-preserving: these are
