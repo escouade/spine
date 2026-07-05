@@ -192,6 +192,14 @@ describe("MikroOrmModule.register + repositoryOf (Story 1.4)", () => {
     expect(repositoryOf(Product)).toBe(repositoryOf(Product));
   });
 
+  it("repositoryOf namespaces the token by connection: identity is (entity, connection)", () => {
+    // Same entity, same connection → same token (stable). Different connection → different token.
+    expect(repositoryOf(Product, "audit")).toBe(repositoryOf(Product, "audit"));
+    expect(repositoryOf(Product, "audit")).not.toBe(repositoryOf(Product));
+    // The default connection ("default") is the SAME token as the no-arg form (back-compat).
+    expect(repositoryOf(Product, "default")).toBe(repositoryOf(Product));
+  });
+
   it("entityForRepository throws a clear error when no entity declares the repo", () => {
     class OrphanRepository extends EntityRepository<User> {}
     expect(() => entityForRepository(orm, OrphanRepository)).toThrow(

@@ -13,7 +13,13 @@ export type {
   RepositoryRegistration,
   EntityRepositoryClass,
 } from "./mikro-orm.repository";
-export { DEFAULT_RETRY } from "./mikro-orm.options";
+export {
+  DEFAULT_RETRY,
+  DEFAULT_CONNECTION,
+  mikroOrmRef,
+  entityManagerRef,
+  mikroOrmInterceptorRef,
+} from "./mikro-orm.options";
 export type { MikroOrmModuleOptions, RetryPolicy } from "./mikro-orm.options";
 
 // Re-export the MikroORM primitives a consumer needs (entity/repository/manager), so an app can define
