@@ -132,6 +132,9 @@ function buildOperation(
       base
     );
     const ref = registry.register(root, { authoredId, derivedBase: base });
+    // A recursive body carries a `$ref: "#"` self-reference; now that the component name is known,
+    // rewrite it to this component so it points at itself instead of dangling at the document root.
+    registry.overwrite(ref, finalizeComponent(root, new Map(), ref));
     op.requestBody = {
       required: true,
       content: { "application/json": { schema: { $ref: ref } } },
@@ -228,10 +231,11 @@ function relocateDefs(
 
   const keys = Object.keys(defs).sort();
 
-  // Pass 1: assign a component name to every $defs key and build the ref map (so inter-entry and root
-  // refs all resolve, regardless of order). Derived names include the key, unique within the fragment.
+  // Pass 1: register each raw $defs entry to lock its final component name, and build the ref map from
+  // the names the registry *actually* assigned. A collision that suffixes `Foo` to `Foo_2` therefore
+  // updates the map too — the pass never leaves a `$ref` pointing at a name that was suffixed away.
   const refMap = new Map<string, string>();
-  const authoredById = new Map<string, string | undefined>();
+  const entryRefs: { key: string; ref: string }[] = [];
   for (const key of keys) {
     const entry = defs[key];
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
@@ -241,19 +245,21 @@ function relocateDefs(
       typeof (entry as JsonSchemaObject).id === "string"
         ? ((entry as JsonSchemaObject).id as string)
         : undefined;
-    const name = authoredId ?? `${base}_${pascalCase(key)}`;
-    authoredById.set(key, authoredId);
-    refMap.set(key, `#/components/schemas/${name}`);
-  }
-
-  // Pass 2: clean + register each entry with the complete ref map.
-  for (const key of keys) {
-    if (!refMap.has(key)) continue;
-    const cleaned = finalizeComponent(defs[key] as JsonSchemaObject, refMap);
-    registry.register(cleaned, {
-      authoredId: authoredById.get(key),
+    const ref = registry.register(entry as JsonSchemaObject, {
+      authoredId,
       derivedBase: `${base}_${pascalCase(key)}`,
     });
+    refMap.set(key, ref);
+    entryRefs.push({ key, ref });
+  }
+
+  // Pass 2: overwrite each locked component with its cleaned body. The complete map is known now, so
+  // inter-entry refs resolve; `selfRef` resolves a `$ref: "#"` (a recursive $defs entry) to itself.
+  for (const { key, ref } of entryRefs) {
+    registry.overwrite(
+      ref,
+      finalizeComponent(defs[key] as JsonSchemaObject, refMap, ref)
+    );
   }
 
   const authoredId =
@@ -264,35 +270,47 @@ function relocateDefs(
 /** Strip a fragment's top-level dialect/meta keys (`$schema`, `$defs`, leaked `id`) and clean the body. */
 function finalizeComponent(
   fragment: JsonSchemaObject,
-  refMap: Map<string, string>
+  refMap: Map<string, string>,
+  selfRef?: string
 ): JsonSchemaObject {
   const clone: { [key: string]: JsonValue } = { ...fragment };
   delete clone.$schema;
   delete clone.$defs;
   delete clone.id;
-  return cleanNode(clone, refMap) as JsonSchemaObject;
+  return cleanNode(clone, refMap, selfRef) as JsonSchemaObject;
 }
 
 /**
  * Recursively rewrite a schema node: `#/$defs/<key>` `$ref` → `#/components/schemas/<name>` (via the ref
- * map), and a discriminated union (`anyOf` whose members share a `const`-valued property) → `oneOf` +
- * `discriminator.propertyName`. A plain `anyOf` (e.g. nullable) is left as-is. No keys are stripped here
- * — a schema property literally named `id`/`$defs` is left untouched (only the top level is cleaned).
+ * map); a `$ref: "#"` (zod's `cycles: "ref"` self-reference) → `selfRef`, this fragment's own component
+ * (else it would dangle at the document root); and a discriminated union (`anyOf` whose members share a
+ * `const`-valued property) → `oneOf` + `discriminator.propertyName`. A plain `anyOf` (e.g. nullable) is
+ * left as-is. No keys are stripped here — a schema property literally named `id`/`$defs` is left
+ * untouched (only the top level is cleaned).
  */
-function cleanNode(value: JsonValue, refMap: Map<string, string>): JsonValue {
-  if (Array.isArray(value)) return value.map((item) => cleanNode(item, refMap));
+function cleanNode(
+  value: JsonValue,
+  refMap: Map<string, string>,
+  selfRef?: string
+): JsonValue {
+  if (Array.isArray(value))
+    return value.map((item) => cleanNode(item, refMap, selfRef));
   if (value !== null && typeof value === "object") {
     const obj = value as { [key: string]: JsonValue };
 
     const ref = obj.$ref;
-    if (typeof ref === "string" && ref.startsWith("#/$defs/")) {
-      const mapped = refMap.get(ref.slice("#/$defs/".length));
+    if (
+      typeof ref === "string" &&
+      (ref.startsWith("#/$defs/") || ref === "#")
+    ) {
+      const mapped =
+        ref === "#" ? selfRef : refMap.get(ref.slice("#/$defs/".length));
       const out: { [key: string]: JsonValue } = {};
       for (const [key, item] of Object.entries(obj)) {
         out[key] =
           key === "$ref" && mapped !== undefined
             ? mapped
-            : cleanNode(item, refMap);
+            : cleanNode(item, refMap, selfRef);
       }
       return out;
     }
@@ -303,9 +321,11 @@ function cleanNode(value: JsonValue, refMap: Map<string, string>): JsonValue {
         const out: { [key: string]: JsonValue } = {};
         for (const [key, item] of Object.entries(obj)) {
           if (key === "anyOf") continue;
-          out[key] = cleanNode(item, refMap);
+          out[key] = cleanNode(item, refMap, selfRef);
         }
-        out.oneOf = obj.anyOf.map((member) => cleanNode(member, refMap));
+        out.oneOf = obj.anyOf.map((member) =>
+          cleanNode(member, refMap, selfRef)
+        );
         out.discriminator = { propertyName };
         return out;
       }
@@ -313,7 +333,7 @@ function cleanNode(value: JsonValue, refMap: Map<string, string>): JsonValue {
 
     const out: { [key: string]: JsonValue } = {};
     for (const [key, item] of Object.entries(obj)) {
-      out[key] = cleanNode(item, refMap);
+      out[key] = cleanNode(item, refMap, selfRef);
     }
     return out;
   }

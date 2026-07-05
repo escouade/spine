@@ -1,5 +1,8 @@
 import type { JsonSchemaObject } from "@spinejs/gateway-core";
 
+/** The `$ref` prefix every registered component is addressed by. */
+const REF_PREFIX = "#/components/schemas/";
+
 /** How a schema fragment is registered as a `components/schemas` entry. */
 export interface RegisterOptions {
   /** Authored name from zod `.meta({ id })` — reserved and takes precedence (AD-8). */
@@ -25,7 +28,16 @@ export class ComponentRegistry {
     if (options.authoredId !== undefined) this.reserved.add(options.authoredId);
     const base = options.authoredId ?? options.derivedBase;
     const name = this.claim(base, fragment, authored);
-    return `#/components/schemas/${name}`;
+    return `${REF_PREFIX}${name}`;
+  }
+
+  /**
+   * Overwrite an already-registered component's body in place. The `$defs` relocation registers each
+   * raw entry first (to lock its final name against collisions), then rewrites it with the cleaned body
+   * once the whole ref map is known — this is that second write.
+   */
+  overwrite(ref: string, fragment: JsonSchemaObject): void {
+    this.schemas.set(ref.slice(REF_PREFIX.length), fragment);
   }
 
   /** The `components.schemas` object in sorted key order, or `undefined` when empty (keep the doc clean). */

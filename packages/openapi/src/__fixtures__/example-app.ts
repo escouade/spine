@@ -79,6 +79,17 @@ class HiddenController {
 const Address = z.object({ street: z.string() }).meta({ id: "Address" });
 const Product = z.object({ sku: z.string() }).meta({ id: "Product" });
 
+// Recursive schema: zod's `cycles: "ref"` emits a `$ref: "#"` self-reference for `children`, which the
+// builder must rewrite to the body's own component (else it dangles at the document root).
+interface CategoryNode {
+  name: string;
+  children: CategoryNode[];
+}
+const Category: z.ZodType<CategoryNode> = z.object({
+  name: z.string(),
+  children: z.array(z.lazy(() => Category)),
+});
+
 @Controller({})
 class CatalogController {
   // Body schema carries `.meta({ id })` → registered under that id.
@@ -104,6 +115,11 @@ class CatalogController {
     },
     () => ({ ok: true })
   );
+
+  // Recursive body → the component references itself, never a bare `$ref: "#"`.
+  createCategory = post("/categories", { body: Category }, () => ({
+    ok: true,
+  }));
 }
 
 const contextFactory = {
