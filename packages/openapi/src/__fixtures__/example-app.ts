@@ -74,6 +74,38 @@ class HiddenController {
   secret = get("/secret", { hidden: true }, () => ({ ok: true }));
 }
 
+// Named schemas are module-level consts: zod's `.meta({ id })` registers the id in a process-global
+// registry, so re-evaluating it per controller instance would throw "ID already exists".
+const Address = z.object({ street: z.string() }).meta({ id: "Address" });
+const Product = z.object({ sku: z.string() }).meta({ id: "Product" });
+
+@Controller({})
+class CatalogController {
+  // Body schema carries `.meta({ id })` → registered under that id.
+  createProduct = post("/products", { body: Product }, () => ({ ok: true }));
+
+  // Reuses `Address` twice → a single `Address` component, referenced by `$ref`.
+  createOrder = post(
+    "/orders",
+    { body: z.object({ billing: Address, shipping: Address }) },
+    () => ({ ok: true })
+  );
+
+  // Discriminated union → `oneOf` + `discriminator.propertyName`.
+  createEvent = post(
+    "/events",
+    {
+      body: z.object({
+        payload: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("click"), x: z.number() }),
+          z.object({ kind: z.literal("view"), url: z.string() }),
+        ]),
+      }),
+    },
+    () => ({ ok: true })
+  );
+}
+
 const contextFactory = {
   create: (honoCtx: HttpRaw): HttpBaseContext => ({ honoCtx }),
 };
@@ -93,5 +125,6 @@ export function fixtureRoutes(): readonly HttpRoute[] {
   gateway.register(getRoutes(new UsersController(), noGuards) as HttpRoute[]);
   gateway.register(getRoutes(new HealthController(), noGuards) as HttpRoute[]);
   gateway.register(getRoutes(new HiddenController(), noGuards) as HttpRoute[]);
+  gateway.register(getRoutes(new CatalogController(), noGuards) as HttpRoute[]);
   return gateway.routes;
 }

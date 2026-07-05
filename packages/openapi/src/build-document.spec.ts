@@ -38,6 +38,12 @@ function paths(
 ): Record<string, Record<string, Op>> {
   return doc.paths as unknown as Record<string, Record<string, Op>>;
 }
+function components(doc: ReturnType<typeof build>): Record<string, Op> {
+  return (
+    (doc.components as { schemas?: Record<string, Op> } | undefined)?.schemas ??
+    {}
+  );
+}
 
 const contextFactory = {
   create: (honoCtx: HttpRaw): HttpBaseContext => ({ honoCtx }),
@@ -103,15 +109,20 @@ describe("buildOpenApiDocument", () => {
     expect(q).toMatchObject({ in: "query", required: true });
   });
 
-  it("maps body to an application/json requestBody", () => {
-    const op = paths(build())["/users"].post;
+  it("registers the body as a component and $refs it (AD-8)", () => {
+    const doc = build();
+    const op = paths(doc)["/users"].post;
     expect(op.requestBody).toMatchObject({
       required: true,
       content: {
         "application/json": {
-          schema: { type: "object", properties: { name: {}, email: {} } },
+          schema: { $ref: "#/components/schemas/PostUsers_Body" },
         },
       },
+    });
+    expect(components(doc).PostUsers_Body).toMatchObject({
+      type: "object",
+      properties: { name: {}, email: {} },
     });
   });
 
@@ -186,7 +197,7 @@ describe("buildOpenApiDocument", () => {
     ]);
   });
 
-  it("strips the $schema dialect marker from an inline requestBody schema", () => {
+  it("strips the $schema dialect marker from the registered component", () => {
     @Controller({})
     class ThingsController {
       create = post(
@@ -198,39 +209,58 @@ describe("buildOpenApiDocument", () => {
       );
     }
     const doc = docFromController(new ThingsController());
-    const op = (doc.paths as Record<string, Record<string, Op>>)["/things"]
-      .post;
-    const schema = (
-      (
-        op.requestBody as Record<
-          string,
-          Record<string, Record<string, unknown>>
-        >
-      ).content["application/json"] as Record<string, unknown>
-    ).schema as Record<string, unknown>;
-    expect(schema.$schema).toBeUndefined();
-    expect(schema.type).toBe("object");
+    const component = components(doc).PostThings_Body;
+    expect(component.$schema).toBeUndefined();
+    expect(component.type).toBe("object");
   });
 
-  it("inlines a reused schema so no $ref dangles (relocation to components is Story 1.4)", () => {
-    const Inner = z.object({ x: z.string() });
-    @Controller({})
-    class ReuseController {
-      list = get("/reuse", { query: z.object({ a: Inner, b: Inner }) }, () => ({
-        ok: true,
-      }));
-    }
-    const doc = docFromController(new ReuseController());
-    const serialized = JSON.stringify(doc);
-    // Self-contained document: no unresolved $ref, no leftover $defs.
-    expect(serialized).not.toContain("$ref");
-    expect(serialized).not.toContain("$defs");
-    const params = (doc.paths as Record<string, Record<string, Op>>)["/reuse"]
-      .get.parameters as Array<Record<string, unknown>>;
-    expect(params.map((p) => p.name)).toEqual(["a", "b"]);
-    expect(params[0].schema).toMatchObject({
-      type: "object",
-      properties: { x: { type: "string" } },
+  it("names a body component from its .meta({ id }) (AD-8, authored id)", () => {
+    const doc = build();
+    const op = paths(doc)["/products"].post;
+    expect(op.requestBody).toMatchObject({
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/Product" },
+        },
+      },
     });
+    // The parasite `id` key from `.meta` is stripped from the component.
+    expect(components(doc).Product).toEqual({
+      type: "object",
+      properties: { sku: { type: "string" } },
+      required: ["sku"],
+    });
+  });
+
+  it("relocates a reused schema to one shared component with no dangling $ref (AD-8)", () => {
+    const doc = build();
+    const serialized = JSON.stringify(doc);
+    expect(serialized).not.toContain("#/$defs/");
+    expect(serialized).not.toContain('"$defs"');
+    // The reused `Address` (a .meta id schema) is a single component, referenced by both fields.
+    const order = components(doc).PostOrders_Body as {
+      properties: Record<string, { $ref?: string }>;
+    };
+    expect(order.properties.billing.$ref).toBe("#/components/schemas/Address");
+    expect(order.properties.shipping.$ref).toBe("#/components/schemas/Address");
+    expect(components(doc).Address).toBeDefined();
+  });
+
+  it("rewrites a discriminated union to oneOf + discriminator (FR-C4)", () => {
+    const doc = build();
+    const body = components(doc).PostEvents_Body as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    const payload = body.properties.payload;
+    expect(payload.anyOf).toBeUndefined();
+    expect(Array.isArray(payload.oneOf)).toBe(true);
+    expect(payload.discriminator).toEqual({ propertyName: "kind" });
+  });
+
+  it("emits components in sorted key order (AD-6)", () => {
+    const doc = build();
+    const keys = Object.keys(components(doc));
+    expect(keys).toEqual([...keys].sort());
+    expect(keys.length).toBeGreaterThan(0);
   });
 });
