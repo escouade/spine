@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { MikroORM, EntityManager, EntitySchema } from "@mikro-orm/core";
+import {
+  MikroORM,
+  EntityManager,
+  EntitySchema,
+  Collection,
+} from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { ClsService, ClsInterceptor } from "@spinejs/cls";
 import type {
@@ -24,15 +29,31 @@ const silentLogger = {
 } as unknown as Logger;
 
 // --- Entity via EntitySchema (no decorators, ADR 0016 NFR1) --------------------------------------
+class Tag {
+  id!: number;
+  label!: string;
+}
+const TagSchema = new EntitySchema<Tag>({
+  class: Tag,
+  properties: {
+    id: { type: "number", primary: true, autoincrement: true },
+    label: { type: "string" },
+  },
+});
+
 class Widget {
   id!: number;
   name!: string;
+  // A M:N collection: adding a link is a pivot-only write — the owning entity has no dirty scalar, so
+  // it is absent from `getUnitOfWork().getChangeSets()` (it lands in `getCollectionUpdates()`).
+  tags = new Collection<Tag>(this);
 }
 const WidgetSchema = new EntitySchema<Widget>({
   class: Widget,
   properties: {
     id: { type: "number", primary: true, autoincrement: true },
     name: { type: "string" },
+    tags: { kind: "m:n", entity: () => Tag },
   },
 });
 
@@ -84,7 +105,7 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
     orm = mikroOrmProvider.factory(cls, {
       driver: BetterSqliteDriver,
       dbName: ":memory:",
-      entities: [WidgetSchema],
+      entities: [WidgetSchema, TagSchema],
     });
     await orm.connect();
     await orm.schema.createSchema();
@@ -116,6 +137,38 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
       name = (await svc.find(1))?.name;
     });
     expect(name).toBe("after");
+  });
+
+  it("flushes a collection-only change (M:N pivot link) that getChangeSets() alone would miss", async () => {
+    // Seed a widget and a tag with their own request (scalar inserts — flush unaffected).
+    await dispatch(async () => {
+      const em = orm.em.getContext();
+      em.persist(em.create(Widget, { name: "w" }));
+      em.persist(em.create(Tag, { label: "t" }));
+    });
+
+    // A request whose ONLY change is a M:N link: no scalar edit on either entity, so the owning entity
+    // never appears in getChangeSets() — the write lives solely in the collection-updates set. The
+    // pre-fix gate (getChangeSets().length > 0) skipped the flush here and silently dropped the pivot row.
+    await dispatch(async () => {
+      const em = orm.em.getContext();
+      const w = await em.findOneOrFail(
+        Widget,
+        { id: 1 },
+        { populate: ["tags"] }
+      );
+      const t = await em.findOneOrFail(Tag, { id: 1 });
+      w.tags.add(t);
+    });
+
+    let links: number | undefined;
+    await dispatch(async () => {
+      const w = await orm.em
+        .getContext()
+        .findOneOrFail(Widget, { id: 1 }, { populate: ["tags"] });
+      links = w.tags.length;
+    });
+    expect(links).toBe(1); // the collection-only write was flushed, not dropped
   });
 
   it("rolls back on error — nothing is persisted — and rethrows", async () => {

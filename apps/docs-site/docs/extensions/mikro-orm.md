@@ -363,15 +363,21 @@ entity's default repository on a connection with `repositoryOf(Entity, connectio
 export class AuditModule {} // inject repositoryOf(AuditLog, "audit")
 ```
 
+A **custom repository class** is injected by its own class token, which carries no connection — so it
+binds to a single connection. To expose one entity on more than one connection, use the **entity-class**
+form: `repositoryOf(Entity, connection)` namespaces the token per connection.
+
 ### Writing more than one connection in a request
 
 Two databases cannot be written atomically — MikroORM has no two-phase commit, and a committed
 transaction cannot be un-done. So by default a request writes **at most one** connection: if a second
-connection's unit-of-work is also dirty, the interceptor **throws** rather than commit a partial
-cross-database write.
+connection's unit-of-work is also dirty, the interceptor **throws** — surfacing the unsound
+cross-database write loudly instead of letting it pass silently. This is **not** a rollback: interceptors
+unwind innermost-first, so the connection that flushed first may already be committed; the throw refuses
+the _second_ write.
 
 When you accept that trade-off — say a primary write plus a best-effort audit row — opt **every**
-participating connection into `multiWrite`:
+participating connection into `multiWrite` (a single hold-out trips the guard):
 
 ```typescript
 MikroOrmModule.configure({ name: "audit", multiWrite: true /* … */ });
@@ -379,7 +385,10 @@ MikroOrmModule.configure({ name: "audit", multiWrite: true /* … */ });
 
 Their units of work then flush **sequentially, best-effort**: if the second flush fails, the first is
 already committed. There is **no cross-database atomicity** — reach for a saga / outbox pattern when
-you need it.
+you need it. Flush order is the **reverse** of the interceptor array (interceptors unwind
+innermost-first): the connection stacked **last** flushes **first**. The opt-in is enforced
+order-independently, so this only decides which commit lands first under `multiWrite`, never whether the
+guard fires.
 
 :::note
 A named connection's `EntityManager` touched inside a request whose interceptor was **not** stacked

@@ -10,6 +10,7 @@ import {
   MikroOrmInterceptor,
   mikroOrmRef,
   mikroOrmInterceptorRef,
+  DEFAULT_CONNECTION,
 } from "./index";
 
 // --- Two independent connections, each its own entity + in-memory DB (each `:memory:` is distinct) ---
@@ -145,22 +146,28 @@ const dispatchBoth = (
   );
 };
 
-const buildApp = (opts: { multiWrite?: boolean } = {}) => {
+// `multiWrite` sets BOTH connections; `primaryMultiWrite` / `auditMultiWrite` override one side (for the
+// asymmetric all-or-nothing case). A cross-DB write needs EVERY participating connection to opt in.
+const buildApp = (
+  opts: {
+    multiWrite?: boolean;
+    primaryMultiWrite?: boolean;
+    auditMultiWrite?: boolean;
+  } = {}
+) => {
   const auditNode = MikroOrmModule.configure({
     driver: BetterSqliteDriver,
     dbName: ":memory:",
     entities: [AuditLogSchema],
     name: AUDIT,
-    multiWrite: opts.multiWrite,
+    multiWrite: opts.auditMultiWrite ?? opts.multiWrite,
   });
   return makeApp([
     MikroOrmModule.configure({
       driver: BetterSqliteDriver,
       dbName: ":memory:",
       entities: [AccountSchema],
-      // Cross-DB writes are best-effort and order-coupled; the intuitive, order-independent path is to
-      // opt in EVERY connection that participates. So the "allows" case marks both.
-      multiWrite: opts.multiWrite,
+      multiWrite: opts.primaryMultiWrite ?? opts.multiWrite,
     }),
     auditNode,
     makeCapture(auditNode),
@@ -224,7 +231,8 @@ describe("MikroOrmModule multiple connections (ADR 0016, Amendment 1)", () => {
     await cap.primary.schema.createSchema();
     await cap.audit.schema.createSchema();
 
-    // Writing BOTH connections in one request: the second (inner) interceptor to flush hits the guard.
+    // Writing BOTH connections in one request: audit (inner) flushes first, then primary (outer),
+    // flushing second, sees a prior write and neither opted in → the guard trips.
     await expect(
       dispatchBoth(cap, async () => {
         const p = cap.primary.em.getContext();
@@ -232,7 +240,30 @@ describe("MikroOrmModule multiple connections (ADR 0016, Amendment 1)", () => {
         const a = cap.audit.em.getContext();
         a.persist(a.create(AuditLog, { message: "boom" }));
       })
-    ).rejects.toThrow(/second connection was written/);
+    ).rejects.toThrow(/more than one connection was written/);
+  });
+
+  it("THROWS when only ONE of two written connections opts into multiWrite (all-or-nothing, order-independent)", async () => {
+    // primary opts in, audit does NOT. audit (inner) flushes first (recording a non-multiWrite write);
+    // primary (outer) then refuses because the connection that wrote first did not opt in. The guard is
+    // symmetric — opting in only one side never silently co-commits the other.
+    const app = buildApp({ primaryMultiWrite: true, auditMultiWrite: false });
+    await app.init();
+    await app.start();
+    const cap = captured!;
+    await cap.primary.schema.createSchema();
+    await cap.audit.schema.createSchema();
+
+    await expect(
+      dispatchBoth(cap, async () => {
+        const p = cap.primary.em.getContext();
+        p.persist(p.create(Account, { balance: 1 }));
+        const a = cap.audit.em.getContext();
+        a.persist(a.create(AuditLog, { message: "half" }));
+      })
+    ).rejects.toThrow(/not every connection opted into multiWrite/);
+
+    await app.stop();
   });
 
   it("ALLOWS writing both connections when they opt into multiWrite (best-effort)", async () => {
@@ -279,7 +310,59 @@ describe("MikroOrmModule multiple connections (ADR 0016, Amendment 1)", () => {
           return { ok: true, data: undefined };
         })
       )
-    ).rejects.toThrow(/its interceptor is not stacked/);
+    ).rejects.toThrow(/request fork is absent/);
+
+    await app.stop();
+  });
+
+  it("register({ connection }) without a matching configure({ name }) fails with a clear diagnostic", async () => {
+    @Module({
+      imports: [MikroOrmModule.register([AuditLog], { connection: "ghost" })],
+    })
+    class FeatureModule {}
+    const app = makeApp([ClsModule, FeatureModule]);
+
+    // The connection node was created (memoized shell) by register() but never filled by configure() —
+    // its lifecycle build must throw the actionable "registered but never configured", not the opaque
+    // internal "Unknown provider mikro-orm.connection-spec".
+    await expect(
+      (async () => {
+        await app.init();
+        await app.start();
+      })()
+    ).rejects.toThrow(
+      /connection "ghost" is registered .* but never configured/
+    );
+  });
+
+  it('mikroOrmRef("default") resolves the very same instance as the MikroORM class token (back-compat, §A1.1)', async () => {
+    // The single most load-bearing back-compat claim: name-based and class-token code never see two
+    // objects for the default connection.
+    let viaClassToken: MikroORM | undefined;
+    let viaDefaultRef: MikroORM | undefined;
+    @Module({
+      inject: [MikroORM, mikroOrmRef(DEFAULT_CONNECTION)],
+      imports: [ClsModule, MikroOrmModule],
+    })
+    class Probe {
+      constructor(classToken: MikroORM, defaultRef: MikroORM) {
+        viaClassToken = classToken;
+        viaDefaultRef = defaultRef;
+      }
+    }
+    const app = makeApp([
+      MikroOrmModule.configure({
+        driver: BetterSqliteDriver,
+        dbName: ":memory:",
+        entities: [AccountSchema],
+      }),
+      Probe,
+    ]);
+    await app.init();
+    await app.start();
+
+    expect(viaClassToken).toBeDefined();
+    expect(viaDefaultRef).toBe(viaClassToken); // same object, not two
 
     await app.stop();
   });

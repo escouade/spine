@@ -35,9 +35,10 @@ const CONTEXT = "MikroOrmInterceptor";
  *
  * With **multiple connections** (ADR 0016, Amendment 1) each connection has its own interceptor,
  * parameterised by its CLS `key` (which fork it brackets) and its `multiWrite` flag. The default
- * connection uses the plain {@link EM} key and `multiWrite: false` — the values the `@Injectable` path
+ * connection uses the plain {@link EM} key and `multiWrite: false` — the defaults its factory provider
  * supplies — so single-connection behaviour is unchanged. A per-request write-once guard ({@link WROTE})
- * makes a second connection written in one request throw, unless it opted into best-effort `multiWrite`.
+ * makes writing more than one connection in a request throw, unless **every** written connection opted
+ * into best-effort `multiWrite`.
  */
 export class MikroOrmInterceptor implements GatewayInterceptor {
   constructor(
@@ -91,21 +92,43 @@ export class MikroOrmInterceptor implements GatewayInterceptor {
       // and flush only if the request actually wrote through THIS connection. A read-only dispatch never
       // begins a transaction, preserving the lazy-flush property (ADR 0016 §2). Change-set computation
       // (not just the persist/remove stacks) is what catches a mutation to an already-loaded entity.
+      //
+      // Mirror MikroORM's OWN "nothing to flush" gate (UnitOfWork.doCommit): entity change sets are not
+      // the whole story. A collection-only change — an M:N / pivot `add`/`remove` with no scalar edit —
+      // lands in `collectionUpdates`, and `computeChangeSet` returns null for the owning entity (empty
+      // scalar payload), so it never appears in `getChangeSets()`; deferred 1:1 / unique-nullable writes
+      // land in `extraUpdates`. Gating on `getChangeSets()` alone would skip the flush and silently drop
+      // those writes (the pre-Amendment unconditional `flush()` caught them). Check all three sets.
       const uow = em.getUnitOfWork();
       uow.computeChangeSets();
-      if (uow.getChangeSets().length > 0) {
-        // Write-once guard (Amendment 1 / decision 2C): a second connection written in one request has
-        // no cross-DB atomicity (MikroORM has no 2PC). Refuse loudly unless THIS connection opted into
-        // best-effort `multiWrite`. With a single connection `WROTE` is set once and never re-checked.
-        if (!this.multiWrite && this.cls.get(WROTE)) {
-          const message =
-            "@spinejs/mikro-orm: a second connection was written in one request. Cross-DB writes have " +
-            "no atomicity (no 2PC); opt in per connection with configure({ name, multiWrite: true }) to " +
-            "allow best-effort sequential flush.";
-          this.log.error(message, CONTEXT);
-          throw new Error(message);
+      const dirty =
+        uow.getChangeSets().length > 0 ||
+        uow.getCollectionUpdates().length > 0 ||
+        uow.getExtraUpdates().size > 0;
+      if (dirty) {
+        // Write-once guard (Amendment 1 / decision 2C), enforced ALL-OR-NOTHING and order-independent.
+        // MikroORM has no two-phase commit, so writes to two connections cannot be atomic. Once ANY
+        // connection has written this request, EVERY connection that writes must have opted into
+        // `multiWrite` — this one AND the connection that wrote first. Otherwise refuse loudly. This is
+        // NOT a rollback: interceptors unwind innermost-first, so the connection that wrote first may
+        // already have flushed/committed; the throw makes the unsound cross-DB write loud, it does not
+        // undo it. With a single connection `WROTE` is set once and the guard never trips.
+        if (this.cls.has(WROTE)) {
+          const firstOptedIntoMultiWrite = this.cls.get(WROTE) === true;
+          if (!this.multiWrite || !firstOptedIntoMultiWrite) {
+            const message =
+              "@spinejs/mikro-orm: more than one connection was written in a single request, but not " +
+              "every connection opted into multiWrite. Cross-DB writes have no atomicity (MikroORM has " +
+              "no two-phase commit); set multiWrite: true on every connection written in the request — " +
+              "configure({ name, multiWrite: true }) — to allow best-effort sequential flush.";
+            this.log.error(message, CONTEXT);
+            throw new Error(message);
+          }
+        } else {
+          // First writer: record whether IT opted into multiWrite, so a later writer can enforce the
+          // symmetry above (a second write is allowed only when both connections opted in).
+          this.cls.set(WROTE, this.multiWrite);
         }
-        this.cls.set(WROTE, true);
         // `flush()` wraps the pending changes in a single implicit transaction (atomic, no `.save()`).
         // A failing flush (e.g. a constraint violation) throws out of here; the pipeline maps it to an
         // error code (ADR 0016 §2, §5).

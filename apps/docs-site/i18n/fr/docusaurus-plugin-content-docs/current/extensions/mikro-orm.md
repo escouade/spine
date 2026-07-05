@@ -374,15 +374,23 @@ le repository par défaut d'une entité sur une connexion avec `repositoryOf(Ent
 export class AuditModule {} // injecter repositoryOf(AuditLog, "audit")
 ```
 
+Une **classe repository custom** est injectée par son propre token de classe, qui ne porte aucune
+connexion — elle est donc liée à une seule connexion. Pour exposer une entité sur plus d'une connexion,
+utilisez la forme **classe d'entité** : `repositoryOf(Entity, connection)` namespace le token par
+connexion.
+
 ### Écrire plus d'une connexion dans une requête
 
 On ne peut pas écrire deux bases de façon atomique — MikroORM n'a pas de commit à deux phases, et une
 transaction validée ne peut pas être annulée. Donc par défaut une requête écrit **au plus une**
-connexion : si l'unité de travail d'une seconde connexion est aussi modifiée, l'interceptor **lève**
-plutôt que de valider une écriture cross-base partielle.
+connexion : si l'unité de travail d'une seconde connexion est aussi modifiée, l'interceptor **lève** —
+rendant l'écriture cross-base non sûre **bruyante** au lieu de la laisser passer en silence. Ce n'est
+**pas** un rollback : les interceptors se déroulent du plus interne au plus externe, donc la connexion
+flushée en premier peut déjà être validée ; la levée refuse la _seconde_ écriture.
 
 Quand vous acceptez ce compromis — par exemple une écriture principale plus une ligne d'audit
-best-effort — activez `multiWrite` sur **chaque** connexion participante :
+best-effort — activez `multiWrite` sur **chaque** connexion participante (un seul manquant déclenche le
+garde) :
 
 ```typescript
 MikroOrmModule.configure({ name: "audit", multiWrite: true /* … */ });
@@ -390,7 +398,10 @@ MikroOrmModule.configure({ name: "audit", multiWrite: true /* … */ });
 
 Leurs unités de travail sont alors flushées **séquentiellement, best-effort** : si le second flush
 échoue, le premier est déjà validé. Il n'y a **aucune atomicité cross-base** — passez par un pattern
-saga / outbox quand vous en avez besoin.
+saga / outbox quand vous en avez besoin. L'ordre de flush est l'**inverse** du tableau d'interceptors
+(ils se déroulent du plus interne au plus externe) : la connexion empilée en **dernier** flushe en
+**premier**. L'opt-in est vérifié indépendamment de l'ordre, donc cela décide seulement quel commit
+atterrit en premier sous `multiWrite`, jamais si le garde se déclenche.
 
 :::note
 Le `EntityManager` d'une connexion nommée touché dans une requête dont l'interceptor n'a **pas** été
