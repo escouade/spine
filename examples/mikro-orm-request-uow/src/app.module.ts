@@ -1,19 +1,12 @@
 import type { ModuleEntry } from "@spinejs/core";
 import { ClsInterceptor, ClsModule, ClsService } from "@spinejs/cls";
-import {
-  MikroOrmModule,
-  MikroOrmInterceptor,
-  asInterceptor,
-} from "@spinejs/mikro-orm";
+import { MikroOrmModule, MikroOrmInterceptor } from "@spinejs/mikro-orm";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import {
   ElectronIpcGatewayModule,
   ipcFeature,
 } from "@spinejs/electron-ipc-gateway";
-import type {
-  ElectronIpcBaseContext,
-  IpcRoute,
-} from "@spinejs/electron-ipc-gateway";
+import type { ElectronIpcBaseContext } from "@spinejs/electron-ipc-gateway";
 import { AppContextFactory } from "./app-context";
 import { SchemaModule } from "./schema.module";
 import { UserSchema, UserRepository } from "./user.entity";
@@ -37,9 +30,10 @@ export const modules: ModuleEntry[] = [
       factory: (cls: ClsService, orm: MikroOrmInterceptor) => [
         new ClsInterceptor<ElectronIpcBaseContext>(cls), // 1. outermost: opens the CLS scope
         // 2. inside the scope: forks the EM + brackets the transaction. MikroOrmInterceptor is
-        // transport-agnostic (it only touches CLS, never the ctx or route), so `asInterceptor` types
-        // it into this transport's narrowed interceptor slot without a hand-written cast.
-        asInterceptor<ElectronIpcBaseContext, string, IpcRoute>(orm),
+        // transport-agnostic (it only touches CLS, never the ctx or route), so it drops straight into
+        // the transport's `interceptors` slot — no cast: the slot is a `ChainInterceptor` whose union
+        // admits a base interceptor.
+        orm,
       ],
     },
   }),

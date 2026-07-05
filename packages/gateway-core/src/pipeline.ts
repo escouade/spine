@@ -1,5 +1,6 @@
 import type { DispatchTarget, Envelope, GatewayContext } from "./gateway.types";
 import {
+  ChainInterceptor,
   ErrorMapper,
   GatewayInterceptor,
   UnauthorizedError,
@@ -20,11 +21,18 @@ export class DispatchPipeline<
   Code extends string = string,
   Target extends DispatchTarget<Ctx> = DispatchTarget<Ctx>
 > {
+  private readonly interceptors: GatewayInterceptor<Ctx, Code, Target>[];
+
   constructor(
     private readonly validator: Validator,
     private readonly errorMapper: ErrorMapper<Code>,
-    private readonly interceptors: GatewayInterceptor<Ctx, Code, Target>[] = []
-  ) {}
+    interceptors: ChainInterceptor<Ctx, Code, Target>[] = []
+  ) {
+    // A transport-agnostic base interceptor (`ChainInterceptor`'s second member) only touches
+    // `ctx`/`next`, never the narrowed route, so it is runtime-safe in a chain narrowed to `Target`.
+    // The single variance assertion that admits it lives here, in the core — never at a wiring site.
+    this.interceptors = interceptors as GatewayInterceptor<Ctx, Code, Target>[];
+  }
 
   /**
    * Runs the interceptor chain then the core pipeline for one dispatch. Never throws — even when

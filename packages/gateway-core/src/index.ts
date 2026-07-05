@@ -16,6 +16,7 @@ export type { RouteMarker } from "./route-marker";
 export { DispatchPipeline } from "./pipeline";
 export { ValidationError, UnauthorizedError } from "./ports";
 export type {
+  ChainInterceptor,
   ContextFactory,
   ErrorMapper,
   GatewayInterceptor,

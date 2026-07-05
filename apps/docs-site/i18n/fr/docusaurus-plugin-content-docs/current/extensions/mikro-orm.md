@@ -177,8 +177,8 @@ de la requête dans la portée CLS, il doit donc s'exécuter **à l'intérieur**
 ```typescript
 // là où vous configurez le transport (HTTP, IPC, …)
 import { ClsInterceptor, ClsModule, ClsService } from "@spinejs/cls";
-import { MikroOrmInterceptor, asInterceptor } from "@spinejs/mikro-orm";
-import type { HttpBaseContext, HttpRoute } from "@spinejs/http-gateway";
+import { MikroOrmInterceptor } from "@spinejs/mikro-orm";
+import type { HttpBaseContext } from "@spinejs/http-gateway";
 
 HttpGatewayModule.configure({
   imports: [ClsModule], // ClsService pour le ClsInterceptor
@@ -190,8 +190,8 @@ HttpGatewayModule.configure({
     factory: (cls: ClsService, orm: MikroOrmInterceptor) => [
       new ClsInterceptor<HttpBaseContext>(cls), // 1. le plus externe : ouvre la portée CLS
       // 2. dans la portée : fork l'EM + flush en fin de requête. MikroOrmInterceptor est
-      // transport-agnostique, donc `asInterceptor` l'insère dans le slot typé de ce transport.
-      asInterceptor<HttpBaseContext, string, HttpRoute>(orm),
+      // transport-agnostique, donc il entre tel quel dans le slot — sans cast.
+      orm,
     ],
   },
 });
@@ -202,11 +202,10 @@ l'étape 2), donc la factory d'interceptors le résout par token. L'ordre compte
 d'abord (il ouvre la portée), `MikroOrmInterceptor` ensuite (il écrit le fork dans cette portée).
 
 `MikroOrmInterceptor` est transport-agnostique (il ne lit jamais le `ctx` ni la route), donc son type
-est le `GatewayInterceptor<GatewayContext, …>` de base. Chaque transport restreint son slot
-`interceptors` à son propre contexte + route : enveloppez l'instance injectée avec
-**`asInterceptor<Ctx, Code, Route>(orm)`** — en IPC, `asInterceptor<ElectronIpcBaseContext, string, IpcRoute>(orm)`.
-(`ClsInterceptor` n'a pas besoin d'enveloppe : il est construit via `new ClsInterceptor<Ctx>` et prend
-son contexte en argument de type.)
+est le `GatewayInterceptor<GatewayContext, …>` de base. Vous l'ajoutez au tableau `interceptors`
+**tel quel** — sans cast ni enveloppe : le slot `interceptors` d'un transport est un `ChainInterceptor`,
+dont l'union admet explicitement un interceptor de base transport-agnostique à côté d'un interceptor
+spécifique au transport.
 
 ## Comment fonctionne la transaction
 
@@ -481,14 +480,9 @@ fournit et l'injecte. À combiner avec `register([User])`.
 L'interceptor d'unité de travail par requête. Fork un `EntityManager` neuf dans la portée CLS et le
 `flush()` une fois à la fin, uniquement sur une enveloppe réussie (pas de `begin()` en amont ; une
 requête sans écriture n'ouvre aucune transaction). Enregistrez-le dans le `configure({ interceptors })`
-du transport **après** `ClsInterceptor` — il doit s'exécuter à l'intérieur de la portée CLS.
-
-### `asInterceptor<Ctx, Code, Route>(orm)`
-
-Insère le `MikroOrmInterceptor` transport-agnostique dans le slot `interceptors` typé d'un transport
-(ex. `asInterceptor<HttpBaseContext, string, HttpRoute>(orm)`). Le type de base de l'interceptor
-(`GatewayInterceptor<GatewayContext, …>`) n'est pas auto-assignable au slot restreint du transport ;
-ceci enveloppe l'assertion pour garder les sites d'appel lisibles. Renvoie la même instance.
+du transport **après** `ClsInterceptor` — il doit s'exécuter à l'intérieur de la portée CLS. Il est
+transport-agnostique : ajoutez-le au tableau `interceptors` **tel quel** — le slot est un
+`ChainInterceptor` dont l'union admet un interceptor de base, donc aucun cast ni enveloppe n'est requis.
 
 ### Ré-exports et briques de la factory
 

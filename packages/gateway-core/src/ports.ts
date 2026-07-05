@@ -57,6 +57,25 @@ export interface GatewayInterceptor<
   ): Promise<Envelope<unknown, Code>>;
 }
 
+/**
+ * An interceptor usable in a chain narrowed to `<Ctx, Code, Route>`: either one typed for exactly that
+ * transport (it may read the route's `address`/`meta`), or a **transport-agnostic** base
+ * `GatewayInterceptor` that only touches `ctx`/`next` — e.g. `ClsInterceptor`, `MikroOrmInterceptor`.
+ *
+ * The base member is what lets a DI-provided, transport-agnostic interceptor drop into a transport's
+ * `configure({ interceptors })` **without a cast**. A base `GatewayInterceptor<GatewayContext, …>` is
+ * not assignable to a narrowed `GatewayInterceptor<Ctx, …, Route>` — the variance flows through
+ * `DispatchTarget.invoke` (a contravariant function-property), and `intercept`'s method-parameter
+ * bivariance only bridges the gap once `Ctx` already matches (why `new ClsInterceptor<Ctx>` fits but an
+ * injected interceptor, fixed at `GatewayContext`, does not). The union admits the base shape
+ * explicitly, so wiring reads `interceptors: [clsInterceptor, ormInterceptor]` with no `as`.
+ */
+export type ChainInterceptor<
+  Ctx extends GatewayContext = GatewayContext,
+  Code extends string = string,
+  Route extends DispatchTarget<Ctx> = DispatchTarget<Ctx>
+> = GatewayInterceptor<Ctx, Code, Route> | GatewayInterceptor;
+
 /** Thrown by a `Validator` adapter when the input fails its schema. */
 export class ValidationError extends Error {
   constructor(message = "Input validation failed") {

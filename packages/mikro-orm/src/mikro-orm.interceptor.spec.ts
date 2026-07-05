@@ -3,12 +3,12 @@ import { MikroORM, EntityManager, EntitySchema } from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { ClsService, ClsInterceptor } from "@spinejs/cls";
 import type {
+  ChainInterceptor,
   DispatchTarget,
   Envelope,
   GatewayContext,
-  GatewayInterceptor,
 } from "@spinejs/gateway-core";
-import { MikroOrmInterceptor, asInterceptor } from "./mikro-orm.interceptor";
+import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
 import { mikroOrmProvider, entityManagerProvider } from "./mikro-orm.module";
 import { EM } from "./mikro-orm.options";
 import type { Logger } from "@spinejs/core";
@@ -168,14 +168,15 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
     expect(inTx).toBe(false); // no up-front begin(): a read-only dispatch never opens a transaction
   });
 
-  it("asInterceptor asserts the interceptor into a transport's narrowed slot (same instance)", () => {
-    // Stand-in for a transport's narrowed route type (adds address/meta like a LoadedRoute). The
-    // assignment only compiles because asInterceptor bridges the base interceptor to the narrowed
-    // slot — a compile-time regression guard for the helper's signature.
-    type NarrowRoute = DispatchTarget<GatewayContext> & { address: string };
-    const slot: GatewayInterceptor<GatewayContext, string, NarrowRoute> =
-      asInterceptor<GatewayContext, string, NarrowRoute>(mikro);
-    expect(slot).toBe(mikro); // pass-through, not a wrapper
+  it("drops into a transport-narrowed ChainInterceptor slot with no cast (the union admits the base interceptor)", () => {
+    // Stand-in for a transport's narrowed context + route (narrows Ctx and adds address/meta, like an
+    // IpcRoute/HttpRoute). The assignment compiles with NO cast only because `ChainInterceptor`'s union
+    // admits a transport-agnostic base interceptor — the compile-time regression guard that keeps
+    // `configure({ interceptors: [..., orm] })` free of a hand-written `as`.
+    type NarrowCtx = GatewayContext & { user: string };
+    type NarrowRoute = DispatchTarget<NarrowCtx> & { address: string };
+    const slot: ChainInterceptor<NarrowCtx, string, NarrowRoute> = mikro;
+    expect(slot).toBe(mikro); // the same instance — no wrapper, no assertion
   });
 
   it("fails fast with a clear, logged diagnostic when run outside a CLS scope", async () => {
