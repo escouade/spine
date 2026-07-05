@@ -32,6 +32,10 @@ describe("ZodSchemaConverter", () => {
     // A field with a default is optional on the way in, required on the way out.
     expect(input.required).toBeUndefined();
     expect(output.required).toEqual(["page"]);
+
+    // Omitted io defaults to "output": the defaulted field projects as required.
+    const defaulted = converter.toJsonSchema(schema);
+    expect(defaulted.required).toEqual(["page"]);
   });
 
   it("maps Date to string/date-time and bigint to string (FR-C5)", () => {
@@ -72,6 +76,21 @@ describe("ZodSchemaConverter", () => {
     expect(props.s).toEqual({});
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain("symbol");
+  });
+
+  it("does not warn for representable open schemas (z.any / z.unknown)", () => {
+    const warn = vi.fn();
+    const converter = new ZodSchemaConverter({ warn });
+
+    const frag = converter.toJsonSchema(
+      z.object({ a: z.any(), u: z.unknown() })
+    );
+
+    // `{}` IS the correct fragment for any/unknown — not an unrepresentable fallback.
+    expect(warn).not.toHaveBeenCalled();
+    const props = frag.properties as Record<string, unknown>;
+    expect(props.a).toEqual({});
+    expect(props.u).toEqual({});
   });
 
   it("rejects a classic zod-v3 schema (flavor guard, seeds the zod-pin test)", () => {
