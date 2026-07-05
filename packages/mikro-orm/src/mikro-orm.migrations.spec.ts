@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { MikroORM, EntitySchema, type Options } from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { MikroOrmModule } from "./index";
@@ -8,6 +8,15 @@ import {
   mikroOrmOptionsToken,
 } from "./mikro-orm.options";
 import { loadMigratorExtension } from "./mikro-orm.migrator";
+import {
+  registerMigrationConnection,
+  isSharedPhysicalConnection,
+  resetMigrationRegistry,
+} from "./mikro-orm.migrations-registry";
+
+// The collision registry is module-scoped; reset it before each test so configure() calls never leak
+// across tests.
+beforeEach(() => resetMigrationRegistry());
 
 // --- Fixture entity (EntitySchema, no decorators — ADR 0016 portable style) ----------------------
 class Widget {
@@ -180,5 +189,105 @@ describe("Migrator extension wiring + peer/optional dependency (Story 1.2)", () 
   it("returns the Migrator class when the peer is installed", () => {
     const Migrator = loadMigratorExtension() as { name: string };
     expect(Migrator.name).toBe("Migrator");
+  });
+});
+
+describe("per-connection isolation + fail-closed collision guard (Story 1.3)", () => {
+  // Builds a bare Options for a physical DB, used to drive the registry directly.
+  const opts = (
+    dbName: string,
+    migrations: NonNullable<Options["migrations"]>,
+    host?: string
+  ): Options => ({ dbName, host, migrations } as unknown as Options);
+
+  describe("namespaced defaults (AC1)", () => {
+    it("defaults a named connection's migrations folder to ./migrations/<name>", () => {
+      expect(resolveMigrationsOptions({}, "analytics")?.path).toBe(
+        "./migrations/analytics"
+      );
+    });
+
+    it("leaves the default connection's path unset (MikroORM's ./migrations)", () => {
+      expect(resolveMigrationsOptions({})?.path).toBeUndefined();
+      expect(resolveMigrationsOptions({}, "default")?.path).toBeUndefined();
+    });
+
+    it("lets an explicit path win over the namespaced default", () => {
+      expect(
+        resolveMigrationsOptions({ path: "./custom" }, "analytics")?.path
+      ).toBe("./custom");
+    });
+  });
+
+  describe("collision guard (AC2/AC3/AC4)", () => {
+    it("fails closed when two connections resolve to the same migrations path", () => {
+      registerMigrationConnection("a", opts("db_a", { path: "./shared" }));
+      expect(() =>
+        registerMigrationConnection("b", opts("db_b", { path: "./shared" }))
+      ).toThrow(/both resolve to the same migrations path "\.\/shared"/);
+    });
+
+    it("fails closed when two connections share a physical DB and tracking table", () => {
+      // Distinct folders (so no path collision), same host+dbName, same default tableName.
+      registerMigrationConnection(
+        "a",
+        opts("app", { path: "./a" }, "localhost")
+      );
+      expect(() =>
+        registerMigrationConnection(
+          "b",
+          opts("app", { path: "./b" }, "localhost")
+        )
+      ).toThrow(/same database.*same migrations tracking table/s);
+    });
+
+    it("warns (not throws) when two connections share a physical DB but use distinct tables", () => {
+      const warn = vi.fn();
+      registerMigrationConnection(
+        "a",
+        opts("app", { path: "./a", tableName: "m_a" }, "localhost"),
+        warn
+      );
+      registerMigrationConnection(
+        "b",
+        opts("app", { path: "./b", tableName: "m_b" }, "localhost"),
+        warn
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/share the same database/)
+      );
+      // Both are flagged so Story 3.1 refuses `fresh` for them.
+      expect(isSharedPhysicalConnection("a")).toBe(true);
+      expect(isSharedPhysicalConnection("b")).toBe(true);
+    });
+
+    it("does not collide a connection with itself when re-registered", () => {
+      registerMigrationConnection("a", opts("app", { path: "./a" }));
+      expect(() =>
+        registerMigrationConnection("a", opts("app", { path: "./a" }))
+      ).not.toThrow();
+    });
+  });
+
+  describe("collision guard through configure() (AC2)", () => {
+    it("throws when two named connections are configured on the same path", () => {
+      MikroOrmModule.configure({
+        driver: BetterSqliteDriver,
+        dbName: "db1",
+        entities: [WidgetSchema],
+        name: "s13x",
+        migrations: { path: "./shared-configure" },
+      } as Options & { name: string });
+
+      expect(() =>
+        MikroOrmModule.configure({
+          driver: BetterSqliteDriver,
+          dbName: "db2",
+          entities: [WidgetSchema],
+          name: "s13y",
+          migrations: { path: "./shared-configure" },
+        } as Options & { name: string })
+      ).toThrow(/both resolve to the same migrations path/);
+    });
   });
 });

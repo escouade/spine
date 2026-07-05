@@ -136,13 +136,26 @@ export const SPINE_MIGRATION_DEFAULTS = {
  * Merges the Spine migration defaults under a connection's `migrations` block (explicit keys win).
  * Returns `undefined` unchanged when no block is declared — so a connection that never configures
  * migrations has **no** `migrations` key injected and stays byte-for-byte as today (NFR-4).
+ *
+ * A **named** connection additionally gets its migrations `path` namespaced by name
+ * (`./migrations/<name>`) when it declares no explicit `path`, so two connections never silently share
+ * a folder (AD-6). The default connection keeps MikroORM's `./migrations`. An explicit `path` always
+ * wins.
  */
 export const resolveMigrationsOptions = (
-  migrations: Options["migrations"]
-): Options["migrations"] =>
-  migrations === undefined
-    ? undefined
-    : { ...SPINE_MIGRATION_DEFAULTS, ...migrations };
+  migrations: Options["migrations"],
+  connectionName: string = DEFAULT_CONNECTION
+): Options["migrations"] => {
+  if (migrations === undefined) return undefined;
+  const merged: MigrationsOptions = {
+    ...SPINE_MIGRATION_DEFAULTS,
+    ...migrations,
+  };
+  if (connectionName !== DEFAULT_CONNECTION && merged.path === undefined) {
+    return { ...merged, path: `./migrations/${connectionName}` };
+  }
+  return merged;
+};
 
 /**
  * Options for `MikroOrmModule.configure()`: the full MikroORM `Options` (driver, `dbName`, `entities`,
