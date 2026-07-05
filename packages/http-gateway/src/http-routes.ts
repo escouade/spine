@@ -11,14 +11,49 @@ import type {
 } from "./http-base.types";
 import type { SseEvent } from "./sse-hub";
 
+/** One extra documented response status. Opaque to the transport — read only by `@spinejs/openapi`. */
+export interface RouteResponseDoc {
+  /** The stable error code documented for this status (mirrors the error envelope's `code`). */
+  code?: string;
+  /** Schema of this status's body, when it carries one. */
+  schema?: ParseableSchema<unknown>;
+  /** Human description of the status. */
+  description?: string;
+}
+
+/**
+ * Optional OpenAPI documentation an author may attach to a route. Every field is optional and inert
+ * to the transport — carried on the marker's `meta` and interpreted only by the OpenAPI battery
+ * (`@spinejs/openapi`). Adding these never changes runtime dispatch (NFR-4).
+ */
+export interface RouteDocMeta {
+  /** Short operation summary. */
+  summary?: string;
+  /** Longer operation description. */
+  description?: string;
+  /** Tags grouping the operation in the document. */
+  tags?: string[];
+  /** Explicit operationId (else auto-derived from method + path). */
+  operationId?: string;
+  /** Marks the operation deprecated. */
+  deprecated?: boolean;
+  /** Response examples, keyed by name (shape interpreted by the OpenAPI battery). */
+  examples?: Record<string, unknown>;
+  /** Additional documented statuses beyond the success/error envelope, keyed by HTTP status code. */
+  responses?: Record<number, RouteResponseDoc>;
+  /** Exclude this route from the generated OpenAPI document. It still serves normally. */
+  hidden?: boolean;
+}
+
 /**
  * Per-route options for a field route. Each input source (`params`/`query`/`body`) is optional; only
  * the provided ones are validated and surfaced to the callback. `response` is reserved for OpenAPI
  * generation — carried in the marker's `meta`, never validated. `guards` are per-route guard classes
  * (merged after the controller's class-level `@UseGuards`). `successStatus` overrides the default
- * `200` on a successful envelope (e.g. `201` for a creation).
+ * `200` on a successful envelope (e.g. `201` for a creation). The `RouteDocMeta` fields
+ * (`summary`, `tags`, `hidden`, …) are optional OpenAPI documentation, inert to dispatch.
  */
-export interface RouteOptions<P, Q, B> {
+export interface RouteOptions<P, Q, B> extends RouteDocMeta {
   params?: ParseableSchema<P>;
   query?: ParseableSchema<Q>;
   body?: ParseableSchema<B>;
@@ -82,7 +117,7 @@ function composeInput<P, Q, B>(
  * Per-transport extras carried on the marker's `meta` (never interpreted by the core): the split
  * input schemas + the `response` schema (for OpenAPI) and the optional per-route success status.
  */
-export interface HttpRouteMeta {
+export interface HttpRouteMeta extends RouteDocMeta {
   inputs: {
     params?: ParseableSchema<unknown>;
     query?: ParseableSchema<unknown>;
@@ -163,6 +198,15 @@ function buildMarker<
     response: options.response,
     successStatus: options.successStatus,
     headers: options.headers,
+    // OpenAPI doc metadata (RouteDocMeta) — carried, never interpreted by the transport.
+    summary: options.summary,
+    description: options.description,
+    tags: options.tags,
+    operationId: options.operationId,
+    deprecated: options.deprecated,
+    examples: options.examples,
+    responses: options.responses,
+    hidden: options.hidden,
   };
   return makeRouteMarker<Ctx, HttpAddress, InputOf<S>>({
     address: { method, path },

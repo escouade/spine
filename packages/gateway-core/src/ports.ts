@@ -1,5 +1,5 @@
 import type { DispatchTarget, Envelope, GatewayContext } from "./gateway.types";
-import type { ParseableSchema } from "./gateway.types";
+import type { JsonSchemaObject, ParseableSchema } from "./gateway.types";
 
 /**
  * Validation port (DIP). A concrete adapter (e.g. a zod-backed one) parses the raw
@@ -8,6 +8,19 @@ import type { ParseableSchema } from "./gateway.types";
  */
 export interface Validator {
   validate<T>(schema: ParseableSchema<T>, input: unknown): T;
+}
+
+/**
+ * Schema-conversion port (DIP). A concrete adapter (e.g. a zod-backed one) turns a schema
+ * into a JSON Schema fragment, keeping the lib free of any schema library — exactly like
+ * `Validator`. `io` selects which side of a transform-bearing schema to project: `"output"`
+ * for responses, `"input"` for request bodies/params.
+ */
+export interface SchemaConverter {
+  toJsonSchema(
+    schema: ParseableSchema<unknown>,
+    opts?: { io?: "input" | "output" }
+  ): JsonSchemaObject;
 }
 
 /**

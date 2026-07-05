@@ -36,6 +36,8 @@ export class HttpGateway<
 > {
   readonly app = new Hono();
   private readonly pipeline: DispatchPipeline<Ctx, Code, HttpRoute<Ctx>>;
+  /** Every route registered so far, accumulated across `register()` calls (one call per feature module). */
+  private readonly _routes: HttpRoute<Ctx>[] = [];
 
   constructor(
     private readonly validator: Validator,
@@ -55,9 +57,21 @@ export class HttpGateway<
     );
   }
 
-  /** Mounts pre-resolved HTTP routes on the Hono app. Called by the feature module. */
+  /**
+   * Mounts pre-resolved HTTP routes on the Hono app. Called **once per feature module**, so it
+   * **accumulates** (appends) — a later module's routes never replace an earlier one's.
+   */
   register(routes: HttpRoute<Ctx>[]): void {
+    this._routes.push(...routes);
     for (const route of routes) this.bind(route);
+  }
+
+  /**
+   * Every route registered so far, across all feature modules. The source the OpenAPI battery
+   * (`@spinejs/openapi`) reads to build the document — the transport never re-scans controllers.
+   */
+  get routes(): readonly HttpRoute<Ctx>[] {
+    return this._routes;
   }
 
   private bind(route: HttpRoute<Ctx>): void {

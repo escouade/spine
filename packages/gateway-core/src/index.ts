@@ -7,6 +7,8 @@ export type {
   GatewayContext,
   Guard,
   GuardConstructor,
+  JsonSchemaObject,
+  JsonValue,
   LoadedRoute,
   ParseableSchema,
 } from "./gateway.types";
@@ -20,6 +22,7 @@ export type {
   ContextFactory,
   ErrorMapper,
   GatewayInterceptor,
+  SchemaConverter,
   Validator,
 } from "./ports";
 export {
