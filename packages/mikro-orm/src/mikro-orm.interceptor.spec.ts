@@ -42,7 +42,7 @@ const WidgetSchema = new EntitySchema<Widget>({
 class WidgetService {
   constructor(private readonly em: EntityManager) {}
   create(name: string): void {
-    this.em.persist(this.em.create(Widget, { name } as Widget));
+    this.em.persist(this.em.create(Widget, { name }));
   }
   async rename(id: number, name: string): Promise<void> {
     const w = await this.em.findOneOrFail(Widget, { id });
