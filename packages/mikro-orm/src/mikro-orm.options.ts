@@ -32,9 +32,10 @@ export const emKey = (name: string): string =>
 
 /**
  * CLS key of the per-request **write-once guard** (ADR 0016, Amendment 1). Shared by every connection's
- * interceptor in a request: the first connection whose unit-of-work is dirty sets it; a second dirty
- * connection then throws (cross-DB writes have no atomicity without 2PC) — unless that connection opted
- * into `multiWrite`. With a single connection it is set once and never re-checked, so nothing changes.
+ * interceptor in a request: the first connection whose unit-of-work is dirty records whether it opted
+ * into `multiWrite`; a second dirty connection then throws unless BOTH it and that first connection opted
+ * in (cross-DB writes have no atomicity without 2PC) — enforced order-independently. With a single
+ * connection it is set once and never re-checked, so nothing changes.
  */
 export const WROTE = "@spinejs/mikro-orm:wrote";
 
@@ -60,8 +61,9 @@ const memo = <T>(
 /**
  * Injection token for a **named** connection's `MikroORM` instance (ADR 0016, Amendment 1).
  * `mikroOrmRef("reporting")` — inject a specific connection where the class token would be ambiguous.
- * `mikroOrmRef("default")` resolves the same instance as the `MikroORM` class token (an `existing`
- * alias registered by `configure()`), so name-based and class-token code never diverge.
+ * `mikroOrmRef("default")` resolves the same instance as the `MikroORM` class token — `configure()`
+ * registers a pass-through provider (`inject: [MikroORM], factory: (orm) => orm`) for it — so name-based
+ * and class-token code never diverge.
  */
 export const mikroOrmRef = (name: string): InjectionToken<MikroORM> =>
   memo(mikroOrmRefs, name, `mikroOrmRef(${name})`);

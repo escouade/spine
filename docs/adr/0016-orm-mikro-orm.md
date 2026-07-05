@@ -355,14 +355,19 @@ commit, once done, cannot be un-done. So no design can make writes to two connec
 honest move is to make the unsound case **loud**, not to dress it up:
 
 - **Default — at most one connection is written per request.** Each interceptor, on a successful
-  envelope, checks whether its fork is dirty (`em.getUnitOfWork().getChangeSets().length > 0`). The
-  first dirty connection sets a per-request `WROTE` flag and flushes (one implicit transaction — fully
-  atomic, exactly today's guarantee). A **second** dirty connection in the same request **throws** a
-  clear error instead of silently committing a partial cross-DB write.
-- **Opt-in `multiWrite: true`** (per named connection) lifts the guard for teams that knowingly write
-  more than one DB per request. They then get **best-effort sequential** semantics (bench 2A): each
-  dirty connection flushes in unwind order; a failure strands whatever already committed. This is
-  documented as **"no cross-DB atomicity"** — it is an escape hatch, not a transaction.
+  envelope, checks whether its fork is dirty — mirroring MikroORM's own "nothing to flush" gate: entity
+  change sets **plus** collection updates (M:N / pivot) **plus** extra updates, not `getChangeSets()`
+  alone (which misses a collection-only write). The first dirty connection records its `multiWrite`
+  opt-in under a per-request `WROTE` flag and flushes (one implicit transaction — fully atomic, exactly
+  today's guarantee). A **second** dirty connection in the same request **throws** unless both it and the
+  first opted into `multiWrite` — enforced order-independently. The throw makes the unsound cross-DB
+  write **loud** rather than letting a partial write pass silently; it is **not** a rollback — because
+  interceptors unwind innermost-first the first connection may already have committed.
+- **Opt-in `multiWrite: true`** (per participating connection) lifts the guard for teams that knowingly
+  write more than one DB per request. **Every** connection written in the request must opt in (a single
+  hold-out trips the guard). They then get **best-effort sequential** semantics (bench 2A): each dirty
+  connection flushes in unwind order; a failure strands whatever already committed. This is documented as
+  **"no cross-DB atomicity"** — it is an escape hatch, not a transaction.
 
 Rejected alternative **2B — emulated 2PC** (`begin` all → `flush` all → `commit` all): scored _below_
 plain best-effort. It shrinks the failure window to the commit loop but cannot eliminate it (no vote,
@@ -381,20 +386,33 @@ the committed outcome — there is only ever one flush that does work. Order mat
 the documented `multiWrite` opt-in. Per-connection flush step:
 
 ```ts
-const em = orm_c.em.fork(); // this connection's fork
+const em = orm_c.em.fork({ disableContextResolution: true }); // this connection's fork
 cls.set(emKey(c), em); // its own CLS key
 const res = await next();
 if (res.ok) {
-  const dirty = em.getUnitOfWork().getChangeSets().length > 0;
+  const uow = em.getUnitOfWork();
+  uow.computeChangeSets();
+  // MikroORM's own gate: entity change sets PLUS collection/extra updates — a collection-only
+  // (M:N / pivot) write is absent from getChangeSets() but present in getCollectionUpdates().
+  const dirty =
+    uow.getChangeSets().length > 0 ||
+    uow.getCollectionUpdates().length > 0 ||
+    uow.getExtraUpdates().size > 0;
   if (dirty) {
-    if (!this.multiWrite && cls.get(WROTE)) {
-      throw new Error(
-        "@spinejs/mikro-orm: a second connection was written in one request. " +
-          "Cross-DB writes have no atomicity; opt in per connection with " +
-          "configure({ name, multiWrite: true }) to allow best-effort sequential flush."
-      );
+    // All-or-nothing, order-independent: once any connection has written, every writer — this one
+    // AND the first — must have opted into multiWrite, else refuse loudly (not a rollback: the
+    // first connection, unwinding earlier, may already have committed).
+    if (cls.has(WROTE)) {
+      if (!this.multiWrite || cls.get(WROTE) !== true) {
+        throw new Error(
+          "@spinejs/mikro-orm: more than one connection was written in a single request, but not " +
+            "every connection opted into multiWrite. Cross-DB writes have no atomicity (MikroORM has " +
+            "no two-phase commit); set multiWrite: true on every connection written in the request."
+        );
+      }
+    } else {
+      cls.set(WROTE, this.multiWrite); // record whether the FIRST writer opted in
     }
-    cls.set(WROTE, true);
     await em.flush(); // one implicit transaction — atomic for THIS connection
   }
 }
@@ -428,9 +446,12 @@ This preserves the shipped no-`begin()` lazy property (§2), the active-scope fa
 - **`repositoryOf`** — `repositoryOf(entity, connection?)`. Absent = default → **the same token as
   today** (back-compat). Identity becomes `(entity, connection)`: memoisation moves from
   `WeakMap<entity>` to `Map<connection, WeakMap<entity, token>>`.
-- **Interceptor** — `MikroOrmInterceptor` gains a CLS-key + `multiWrite` parameter (defaults `EM`,
-  `false`). The shipped `@Injectable({ inject: [MikroORM, ClsService, loggerToken] })` stays valid for
-  the default; named interceptors come from the per-name factory.
+- **Interceptor** — `MikroOrmInterceptor` gains a CLS-key + `multiWrite` **constructor** parameter
+  (defaults `EM`, `false`). These extra parameters are incompatible with the framework's exact-arity
+  `@Injectable` check (`CtorDepsMatch`), so the decorator is dropped and **both** the default and named
+  interceptors are built by a factory provider (the default passing `EM` / `false`). Injecting the
+  `MikroOrmInterceptor` class token still resolves for the default; obtain it via `configure()`'s export
+  rather than self-registering the class.
 
 ### A1.6 Mandatory leak mitigation
 

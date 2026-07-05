@@ -49,11 +49,12 @@ const delay = (ms: number): Promise<void> =>
  * (`context: () => cls.get(emKey(name))`, ADR 0016 §1 / Amendment 1). `initSync` defers the actual
  * connection to `onStart` — the deterministic lifecycle window of ADR 0010.
  *
- * For a **named** connection the `context` hook **throws** when a request scope is active but this
- * connection's fork is absent: that means its `MikroOrmInterceptor` was not stacked, and without the
- * throw MikroORM would silently fall back to the root manager — request A's data leaking into request B
- * on that connection (Amendment 1, mandatory leak mitigation). The default connection keeps the plain,
- * non-throwing hook so its behaviour is byte-for-byte unchanged.
+ * For a **named** connection the `context` hook **throws** when a CLS scope is active but this
+ * connection's fork is absent — otherwise MikroORM silently falls back to the root manager and one
+ * scope's identity map leaks into the next (Amendment 1, mandatory leak mitigation). On a transport that
+ * means its `MikroOrmInterceptor` was not stacked; inside a non-gateway scope (a scheduler tick, a manual
+ * `cls.run()`) it means the fork was not seeded. The default connection keeps the plain, non-throwing
+ * hook so its behaviour is byte-for-byte unchanged.
  */
 const ormFactory =
   (name: string) =>
@@ -67,9 +68,11 @@ const ormFactory =
         const em = cls.get(key) as EntityManager | undefined;
         if (!em && guardMissingFork && cls.active) {
           throw new Error(
-            `@spinejs/mikro-orm: connection "${name}" is used inside a request but its request fork is ` +
-              `absent — its interceptor is not stacked. Add mikroOrmInterceptorRef("${name}") to the ` +
-              `transport's interceptors (after ClsInterceptor).`
+            `@spinejs/mikro-orm: connection "${name}" was used inside an active CLS scope but its ` +
+              `request fork is absent — falling back to the root manager would leak one scope's identity ` +
+              `map into the next. On a transport, stack its interceptor: add mikroOrmInterceptorRef("${name}") ` +
+              `after ClsInterceptor. In a non-gateway scope (e.g. a scheduler tick or a manual cls.run()), ` +
+              `seed the fork first with cls.set(emKey("${name}"), orm.em.fork({ disableContextResolution: true })).`
           );
         }
         return em;
@@ -228,7 +231,27 @@ const connectionNodes = new Map<string, DynamicModule>();
 const connectionNode = (name: string): DynamicModule => {
   let node = connectionNodes.get(name);
   if (!node) {
-    node = { module: NamedMikroOrmConnection, fresh: true };
+    node = {
+      module: NamedMikroOrmConnection,
+      fresh: true,
+      // Placeholder wiring for the `register({ connection }) before / without configure({ name })` case.
+      // `configure({ name })` overwrites `providers` with the real factories; if it NEVER runs, building
+      // NamedMikroOrmConnection would otherwise fail on an opaque "Unknown provider mikro-orm.connection-spec"
+      // (an internal token the user never wrote). This sentinel turns that into a clear diagnostic.
+      providers: [
+        {
+          provide: connectionSpecToken,
+          inject: [],
+          factory: (): { orm: MikroORM; retry: RetryPolicy } => {
+            throw new Error(
+              `@spinejs/mikro-orm: connection "${name}" is registered — register(..., { connection: "${name}" }) ` +
+                `— but never configured. Add MikroOrmModule.configure({ name: "${name}", driver, dbName, ... }) ` +
+                `at app level.`
+            );
+          },
+        },
+      ],
+    };
     connectionNodes.set(name, node);
   }
   return node;
@@ -342,9 +365,9 @@ export class MikroOrmModule implements OnStart, OnStop {
       return node;
     }
 
-    // Default connection: the unchanged class-token path, plus name-based aliases so `mikroOrmRef("default")`
-    // (and the em/interceptor refs) resolve the very same instances — uniform code can address any
-    // connection by name, the default included.
+    // Default connection: the unchanged class-token path, plus name-based pass-through providers so
+    // `mikroOrmRef("default")` (and the em/interceptor refs) resolve the very same instances — uniform
+    // code can address any connection by name, the default included.
     return {
       module: MikroOrmModule,
       // ClsModule provides the single `ClsService` the factory's `context` hook and the interceptor
@@ -406,6 +429,11 @@ export class MikroOrmModule implements OnStart, OnStop {
    * `opts.connection` (ADR 0016, Amendment 1) binds the repositories to a **named** connection — the
    * factories inject `mikroOrmRef(connection)` and `repositoryOf` namespaces the token by connection.
    * Omit it (or pass `"default"`) for the default connection, unchanged.
+   *
+   * Note: a **custom repository class** is injected by its own class token, which carries no connection —
+   * so it binds to a single connection. Registering the same repository class on two connections yields
+   * two providers with the same token; to expose one entity on more than one connection use the
+   * **entity-class** form, whose `repositoryOf(Entity, connection)` token is namespaced per connection.
    */
   static register(
     items: RepositoryRegistration[],
