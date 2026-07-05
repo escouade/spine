@@ -119,6 +119,19 @@ interceptors: {
 
 One database is the default (class tokens, everything above). For more — a replica, an audit store — give each additional connection a `name`; it is injected via `mikroOrmRef(name)` and brings its own lifecycle. Stack each connection's interceptor (`mikroOrmInterceptorRef(name)`) on the transport. A request writes **at most one** connection unless the connections opt into `multiWrite` (then best-effort sequential — **no cross-DB atomicity**).
 
+## Migrations
+
+Declare a `migrations` block on a connection you already configure — no `mikro-orm.config.ts`, no second source of truth — and the MikroORM Migrator is wired onto it with entity-first defaults (`emit: "ts"`, `snapshot`, `transactional`, `allOrNothing`). A named connection's folder defaults to `./migrations/<name>`, and configuration **fails closed** if two connections would share a path or a tracking table. `@mikro-orm/migrations` (`^6`) is an optional peer, required only when you declare migrations; a connection with no block is byte-for-byte unchanged. Commit migration files **and** the snapshot together.
+
+```ts
+MikroOrmModule.configure({
+  driver,
+  dbName,
+  entities: [User],
+  migrations: { path: "./migrations" },
+});
+```
+
 ## Limitations
 
 - **No cross-database atomicity** — multiple connections are supported, but a request writes at most one unless you opt into `multiWrite`, and even then flushes are best-effort sequential (no two-phase commit).
