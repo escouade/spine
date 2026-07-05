@@ -59,3 +59,19 @@ export interface LoadedRoute<Ctx extends GatewayContext, Addr = string>
    */
   meta?: unknown;
 }
+
+/** Any JSON-serializable value. Dependency-free — the structural half of {@link JsonSchemaObject}. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/**
+ * A JSON-serializable JSON Schema fragment — the output of a {@link SchemaConverter}. Kept as a
+ * structural, dependency-free shape (no zod, no OpenAPI types) so `gateway-core` stays lib-free;
+ * the OpenAPI battery downstream refines the precise field modelling when it assembles the document.
+ */
+export type JsonSchemaObject = { [key: string]: JsonValue };
