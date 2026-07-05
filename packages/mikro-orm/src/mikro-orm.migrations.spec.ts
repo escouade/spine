@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { EntitySchema, type Options } from "@mikro-orm/core";
+import { MikroORM, EntitySchema, type Options } from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { MikroOrmModule } from "./index";
 import {
@@ -7,6 +7,7 @@ import {
   resolveMigrationsOptions,
   mikroOrmOptionsToken,
 } from "./mikro-orm.options";
+import { loadMigratorExtension } from "./mikro-orm.migrator";
 
 // --- Fixture entity (EntitySchema, no decorators — ADR 0016 portable style) ----------------------
 class Widget {
@@ -133,5 +134,51 @@ describe("migrations config block + Spine defaults (Story 1.1)", () => {
       expect(migrations.snapshot).toBe(false);
       expect(migrations.transactional).toBe(true);
     });
+  });
+});
+
+describe("Migrator extension wiring + peer/optional dependency (Story 1.2)", () => {
+  // FR-1 / AD-2: a declared block registers the Migrator extension so getMigrator() resolves.
+  it("registers the Migrator extension so getMigrator() resolves", async () => {
+    const dyn = MikroOrmModule.configure({
+      ...baseOptions(),
+      migrations: { path: "./migrations" },
+    });
+    const value = optionsValueOf(dyn) as unknown as Options;
+    // The extension is on the resolved options that reach the ORM factory.
+    expect(Array.isArray(value.extensions)).toBe(true);
+
+    const orm = MikroORM.initSync(value);
+    try {
+      const migrator = orm.getMigrator();
+      expect(migrator).toBeDefined();
+      expect(migrator.constructor.name).toBe("Migrator");
+    } finally {
+      await orm.close(true).catch(() => undefined);
+    }
+  });
+
+  // NFR-4 / AD-9: no block → no extension registered, nothing to require.
+  it("registers no extension when no migrations block is declared", () => {
+    const value = optionsValueOf(MikroOrmModule.configure(baseOptions()));
+    expect("extensions" in value).toBe(false);
+  });
+
+  // AD-9: a missing peer surfaces an actionable error naming the package and its major.
+  it("throws an actionable error when @mikro-orm/migrations is not installed", () => {
+    const failingRequire = (() => {
+      throw new Error("Cannot find module '@mikro-orm/migrations'");
+    }) as unknown as NodeRequire;
+
+    expect(() => loadMigratorExtension(failingRequire)).toThrow(
+      /@mikro-orm\/migrations/
+    );
+    expect(() => loadMigratorExtension(failingRequire)).toThrow(/\^6/);
+  });
+
+  // The happy path returns the real Migrator class (default require).
+  it("returns the Migrator class when the peer is installed", () => {
+    const Migrator = loadMigratorExtension() as { name: string };
+    expect(Migrator.name).toBe("Migrator");
   });
 });

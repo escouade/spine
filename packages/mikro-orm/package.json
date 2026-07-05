@@ -53,5 +53,16 @@
     "@spinejs/cls": "workspace:^",
     "@spinejs/core": "workspace:^",
     "@spinejs/gateway-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "@mikro-orm/migrations": "^6"
+  },
+  "peerDependenciesMeta": {
+    "@mikro-orm/migrations": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@mikro-orm/migrations": "^6"
   }
 }

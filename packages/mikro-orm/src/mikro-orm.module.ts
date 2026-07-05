@@ -17,6 +17,7 @@ import {
 import { ClsModule, ClsService } from "@spinejs/cls";
 import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
 import { SpineMikroLogger } from "./mikro-orm.logger";
+import { loadMigratorExtension } from "./mikro-orm.migrator";
 import {
   entityForRepository,
   isRepositoryClass,
@@ -327,13 +328,19 @@ export class MikroOrmModule implements OnStart, OnStop {
   static configure(options: MikroOrmModuleOptions): DynamicModule {
     const { retry, name, multiWrite = false, ...ormOptions } = options;
     const resolvedRetry: RetryPolicy = { ...DEFAULT_RETRY, ...retry };
-    // Apply the Spine migration defaults when (and only when) a `migrations` block is declared —
-    // otherwise the options object is passed through untouched, so a connection that never migrates is
-    // byte-for-byte as before (NFR-4). Reused by both the named and default connection paths below.
+    // When (and only when) a `migrations` block is declared, apply the Spine migration defaults and
+    // register the `Migrator` extension on this connection (loaded from the optional peer
+    // `@mikro-orm/migrations`, failing closed with an actionable error if it is absent). Otherwise the
+    // options object is passed through untouched, so a connection that never migrates is byte-for-byte
+    // as before and pulls in no migrations dependency (NFR-4). Reused by both connection paths below.
     const resolvedOrmOptions: Options = ormOptions.migrations
       ? {
           ...ormOptions,
           migrations: resolveMigrationsOptions(ormOptions.migrations),
+          extensions: [
+            ...(ormOptions.extensions ?? []),
+            loadMigratorExtension(),
+          ],
         }
       : ormOptions;
 
