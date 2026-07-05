@@ -39,7 +39,10 @@ export interface RouteDocMeta {
   deprecated?: boolean;
   /** Response examples, keyed by name (shape interpreted by the OpenAPI battery). */
   examples?: Record<string, unknown>;
-  /** Additional documented statuses beyond the success/error envelope, keyed by HTTP status code. */
+  /**
+   * Additional documented statuses beyond the success/error envelope, keyed by HTTP status code.
+   * Note the plural: distinct from `RouteOptions.response` (singular — the success body schema).
+   */
   responses?: Record<number, RouteResponseDoc>;
   /** Exclude this route from the generated OpenAPI document. It still serves normally. */
   hidden?: boolean;
@@ -198,15 +201,21 @@ function buildMarker<
     response: options.response,
     successStatus: options.successStatus,
     headers: options.headers,
-    // OpenAPI doc metadata (RouteDocMeta) — carried, never interpreted by the transport.
-    summary: options.summary,
-    description: options.description,
-    tags: options.tags,
-    operationId: options.operationId,
-    deprecated: options.deprecated,
-    examples: options.examples,
-    responses: options.responses,
-    hidden: options.hidden,
+    // OpenAPI doc metadata (RouteDocMeta) — carried, never interpreted by the transport. Only the
+    // provided fields are added, so a route with no doc options yields a minimal `meta` (no
+    // `undefined`-valued keys) — matching the `sse()` path and keeping downstream output stable.
+    ...(options.summary !== undefined && { summary: options.summary }),
+    ...(options.description !== undefined && {
+      description: options.description,
+    }),
+    ...(options.tags !== undefined && { tags: options.tags }),
+    ...(options.operationId !== undefined && {
+      operationId: options.operationId,
+    }),
+    ...(options.deprecated !== undefined && { deprecated: options.deprecated }),
+    ...(options.examples !== undefined && { examples: options.examples }),
+    ...(options.responses !== undefined && { responses: options.responses }),
+    ...(options.hidden !== undefined && { hidden: options.hidden }),
   };
   return makeRouteMarker<Ctx, HttpAddress, InputOf<S>>({
     address: { method, path },
