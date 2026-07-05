@@ -303,3 +303,156 @@ package.
   matters. The docs (§6) carry this prominently.
 - **Caution — a scope must be active**: every entry point needing the EM must run inside a CLS scope
   with a fork set (the provided interceptor). Outside one, `getContext()` has no fork to resolve.
+
+## Amendment 1 — Named multi-connection support (2026-07-05)
+
+- **Status**: Proposed (supersedes the v1 single-connection scope on acceptance).
+- **Date**: 2026-07-05.
+- **Reverses**: this ADR's implicit single-connection assumption (§4 speaks of _the_ connection,
+  singular) and the product brief's "Multiple DataSources / named connections" v1 non-goal.
+  Multi-connection surfaced as a base requirement after ship; this amendment brings it back in a
+  fully back-compatible, **additive** shape — no change to any single-connection code path.
+- **Evidence**: a weighted architecture bench (BMAD architect) across the two decisions this problem
+  actually turns on — interceptor topology and partial-failure flush semantics. The winning pair
+  (**1B + 2C**, below) is the only one that adds **zero new mechanism** to the shipped
+  single-connection path and preserves the lazy-flush differentiator per connection.
+
+### A1.1 Back-compat is the frame, not a footnote
+
+Everything below is additive. The single-connection surface stays **byte-for-byte**: `configure(options)`,
+injecting the `MikroORM` / `EntityManager` **class tokens**, `register([Repo])`, `repositoryOf(Entity)`.
+The unnamed connection **is** "the default": `mikroOrmRef("default")` resolves — via an `existing`
+alias — to the same instance as the `MikroORM` class token, so name-based and class-token code never
+see two objects. A codebase that never passes a `name` is unaffected by this amendment.
+
+### A1.2 Topology — one interceptor per connection, chained (bench: 1B)
+
+Each connection yields its **own** `MikroOrmInterceptor`, parameterised by that connection's CLS key;
+the transport stacks them explicitly (`[ClsInterceptor, ormMain, ormReplica]`). Rejected alternatives:
+
+- **1A — a single registry-backed interceptor** that forks every registered connection each request.
+  It forks all N connections on every dispatch even for a single-DB request, and re-introduces a
+  shared mutable registry populated across N `fresh` connection nodes — a build-order coupling that
+  fights the isolation `fresh: true` buys ([ADR 0009](0009-module-loading-two-phases.md)).
+- **1C — hybrid** (registry-backed single interceptor with per-transport opt-in on which connections
+  it brackets). More API surface to freeze for no gain once 2C removes the need for a cross-EM
+  coordinator (below).
+
+**1B wins** because it leaves the shipped `[ClsInterceptor, MikroOrmInterceptor]` path unchanged (the
+interceptor merely gains a CLS-key parameter defaulting to `EM`), forks **only** each interceptor's own
+connection — so a connection a transport does not stack is never even forked, preserving lazy-flush by
+construction — and is the most DI-native shape: each interceptor is an explicit provider, explicitly
+stacked, explicitly injected by a per-name token, mirroring how `ClsInterceptor` already composes.
+
+**Accepted counter-argument**: 1B gives each interceptor visibility of **only its own** EM, so it
+cannot host a cross-EM coordinator — it forecloses emulated two-phase commit. That ceiling is
+illusory (MikroORM has no real 2PC — see A1.3), and 2C removes the need for a coordinator entirely.
+
+### A1.3 Flush semantics — write-once per request, opt-in multi-write (bench: 2C)
+
+MikroORM has **no distributed / two-phase commit**: `flush()` is one implicit `begin`+`commit`, and a
+commit, once done, cannot be un-done. So no design can make writes to two connections atomic. The
+honest move is to make the unsound case **loud**, not to dress it up:
+
+- **Default — at most one connection is written per request.** Each interceptor, on a successful
+  envelope, checks whether its fork is dirty (`em.getUnitOfWork().getChangeSets().length > 0`). The
+  first dirty connection sets a per-request `WROTE` flag and flushes (one implicit transaction — fully
+  atomic, exactly today's guarantee). A **second** dirty connection in the same request **throws** a
+  clear error instead of silently committing a partial cross-DB write.
+- **Opt-in `multiWrite: true`** (per named connection) lifts the guard for teams that knowingly write
+  more than one DB per request. They then get **best-effort sequential** semantics (bench 2A): each
+  dirty connection flushes in unwind order; a failure strands whatever already committed. This is
+  documented as **"no cross-DB atomicity"** — it is an escape hatch, not a transaction.
+
+Rejected alternative **2B — emulated 2PC** (`begin` all → `flush` all → `commit` all): scored _below_
+plain best-effort. It shrinks the failure window to the commit loop but cannot eliminate it (no vote,
+no un-commit → commit #1 ok + commit #2 fail still strands a partial write — the same worst case as
+2A, mis-advertised as a guarantee), and it **reverses §2's shipped "no up-front `begin()`"**, holding
+N transactions open across the whole two-pass window (lock-hold, pool pressure, deadlock surface). A
+guarantee you cannot keep is worse than an honest weakness you document.
+
+### A1.4 The composed design (1B + 2C)
+
+The two picks compose without tension precisely because 2C needs **no** cross-EM coordinator — just a
+per-request boolean — which 1B's isolated interceptors can share through CLS. Better still, **2C
+neutralises 1B's one ergonomic footgun**: since at most one connection is dirty per request by
+default, the flush **order** across stacked interceptors (innermost unwinds first) no longer changes
+the committed outcome — there is only ever one flush that does work. Order matters again **only** under
+the documented `multiWrite` opt-in. Per-connection flush step:
+
+```ts
+const em = orm_c.em.fork(); // this connection's fork
+cls.set(emKey(c), em); // its own CLS key
+const res = await next();
+if (res.ok) {
+  const dirty = em.getUnitOfWork().getChangeSets().length > 0;
+  if (dirty) {
+    if (!this.multiWrite && cls.get(WROTE)) {
+      throw new Error(
+        "@spinejs/mikro-orm: a second connection was written in one request. " +
+          "Cross-DB writes have no atomicity; opt in per connection with " +
+          "configure({ name, multiWrite: true }) to allow best-effort sequential flush."
+      );
+    }
+    cls.set(WROTE, true);
+    await em.flush(); // one implicit transaction — atomic for THIS connection
+  }
+}
+return res;
+```
+
+This preserves the shipped no-`begin()` lazy property (§2), the active-scope fail-fast, and — because
+`WROTE` is set once and clean forks are a no-op — single-connection behaviour byte-for-byte.
+
+### A1.5 Public API surface (frozen for validation)
+
+- **Tokens**. Default keeps the **class tokens** `MikroORM`, `EntityManager` (back-compat). Named
+  connections add memoised, per-name `InjectionToken`s (one token per name, mirroring
+  [ADR 0007](0007-injection-token-symbol-identity.md) and the existing `repositoryOf` memoisation):
+  `mikroOrmRef(name)`, `entityManagerRef(name)`, `mikroOrmInterceptorRef(name)`. Reserve
+  `DEFAULT_CONNECTION = "default"`; `mikroOrmRef("default")` is an `existing` alias of the `MikroORM`
+  class token.
+- **CLS key scheme**. `emKey(name) = "@spinejs/mikro-orm:em:" + name`; the default connection keeps the
+  unchanged shipped key `EM = "@spinejs/mikro-orm:em"`. One write-guard key,
+  `WROTE = "@spinejs/mikro-orm:wrote"`, shared by all interceptors in a request.
+- **`configure`** — back-compat by omission:
+  - `configure(options)` — **unchanged** default: non-`fresh` node, class-token exports; internally
+    also registers `mikroOrmInterceptorRef("default")` and the alias.
+  - `configure(options & { name: string; multiWrite?: boolean })` — a named connection: a `fresh: true`
+    node (so N coexist) owning its **own** `onStart`/`onStop` + retry, exporting
+    `mikroOrmRef(name)` / `entityManagerRef(name)` / `mikroOrmInterceptorRef(name)`. `multiWrite`
+    defaults `false`.
+- **`register`** — `register(items, opts?: { connection?: string })`. `connection` absent = default
+  (unchanged); otherwise the repository factories inject `mikroOrmRef(connection)` instead of the
+  `MikroORM` class token.
+- **`repositoryOf`** — `repositoryOf(entity, connection?)`. Absent = default → **the same token as
+  today** (back-compat). Identity becomes `(entity, connection)`: memoisation moves from
+  `WeakMap<entity>` to `Map<connection, WeakMap<entity, token>>`.
+- **Interceptor** — `MikroOrmInterceptor` gains a CLS-key + `multiWrite` parameter (defaults `EM`,
+  `false`). The shipped `@Injectable({ inject: [MikroORM, ClsService, loggerToken] })` stays valid for
+  the default; named interceptors come from the per-name factory.
+
+### A1.6 Mandatory leak mitigation
+
+1B's one trap: a connection `configure`d but whose interceptor is **not** stacked on a transport has an
+empty CLS key, so its `context: () => cls.get(emKey(name))` hook returns `undefined` and MikroORM
+falls back to the **root** `orm.em` — the shared-manager cross-request leak this ADR's Context warns
+about, now unflushed. The named `context` hook therefore **must throw** when a CLS scope is active but
+its fork is absent, converting a silent leak into a loud "you configured connection _X_ but did not
+stack its interceptor" — the same posture as the existing active-scope guard.
+
+### A1.7 Consequences & the one open decision
+
+- **Positive**: single-connection users pay nothing — no new tokens, no guard firing (the `WROTE`
+  check never trips with one connection), lazy-flush intact.
+- **Positive**: the design refuses the one thing it cannot do (atomic cross-DB writes) **loudly** and
+  makes the escape hatch explicit and self-documenting, rather than shipping a partial-commit footgun.
+- **Negative**: `multiWrite` delivers only best-effort sequential flush; a mid-sequence failure
+  strands earlier commits. Documented, not solved — the correct solution (saga / transactional outbox)
+  is out of scope for this package.
+- **Negative**: more surface area — three new token constructors, a `name`/`connection`/`multiWrite`
+  parameter set, and per-connection lifecycle nodes to test.
+- **Open decision for validation**: ship `multiWrite` (best-effort 2A) in this iteration, or leave
+  cross-DB writes **unsupported** (guard always on) until a saga/outbox story exists? Architect's lean:
+  ship the flag documented as "no cross-DB atomicity" — once the guard exists, the opt-in costs almost
+  nothing and unblocks legitimate audit-row / secondary-DB patterns.
