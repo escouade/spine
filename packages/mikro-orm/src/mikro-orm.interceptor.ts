@@ -1,4 +1,4 @@
-import { Injectable, Logger, loggerToken } from "@spinejs/core";
+import { Logger } from "@spinejs/core";
 import { MikroORM } from "@mikro-orm/core";
 import { ClsService } from "@spinejs/cls";
 import type {
@@ -7,7 +7,7 @@ import type {
   GatewayContext,
   GatewayInterceptor,
 } from "@spinejs/gateway-core";
-import { EM } from "./mikro-orm.options";
+import { EM, WROTE } from "./mikro-orm.options";
 
 /** Log context tag for the interceptor's diagnostics. */
 const CONTEXT = "MikroOrmInterceptor";
@@ -32,13 +32,23 @@ const CONTEXT = "MikroOrmInterceptor";
  * Must run **inside** the CLS scope opened by `ClsInterceptor` (ADR 0003): register it in the gateway
  * `configure({ interceptors })` **after** `ClsInterceptor`. Without an active scope it fails fast with a
  * clear, logged diagnostic naming the wiring fix (not an opaque store-write error mapped to a code).
+ *
+ * With **multiple connections** (ADR 0016, Amendment 1) each connection has its own interceptor,
+ * parameterised by its CLS `key` (which fork it brackets) and its `multiWrite` flag. The default
+ * connection uses the plain {@link EM} key and `multiWrite: false` — the values the `@Injectable` path
+ * supplies — so single-connection behaviour is unchanged. A per-request write-once guard ({@link WROTE})
+ * makes a second connection written in one request throw, unless it opted into best-effort `multiWrite`.
  */
-@Injectable({ inject: [MikroORM, ClsService, loggerToken] })
 export class MikroOrmInterceptor implements GatewayInterceptor {
   constructor(
     private readonly orm: MikroORM,
     private readonly cls: ClsService,
-    private readonly log: Logger
+    private readonly log: Logger,
+    // Both connections construct the interceptor through a factory provider (see MikroOrmModule): the
+    // default connection passes the defaults — the plain EM key, no cross-write opt-in — and a named
+    // connection passes its own `emKey(name)` and `multiWrite` flag.
+    private readonly key: string = EM,
+    private readonly multiWrite: boolean = false
   ) {}
 
   async intercept(
@@ -59,23 +69,48 @@ export class MikroOrmInterceptor implements GatewayInterceptor {
       throw new Error(message);
     }
 
-    // `orm.em` is always the ROOT manager; `.fork()` yields a fresh per-request manager. Storing it in
-    // CLS makes `orm.em`'s operations delegate to it through the `context` hook (ADR 0016 §1-2).
-    const em = this.orm.em.fork();
-    this.cls.set(EM, em);
+    // `orm.em` is always the ROOT manager; `.fork()` yields a fresh per-request manager. Storing it under
+    // THIS connection's key makes its `orm.em` operations delegate to it via the `context` hook, and
+    // keeps N connections' forks apart in the one request scope (ADR 0016 §1-2 / Amendment 1).
+    //
+    // `disableContextResolution` is REQUIRED: `fork()` otherwise consults the `context` hook to find the
+    // current em, but a named connection's hook THROWS when no fork is set yet (the leak guard) — exactly
+    // the state we are in while creating that first fork. The flag forks straight from the root, breaking
+    // the chicken-and-egg; the default connection's non-throwing hook makes it a harmless no-op there.
+    const em = this.orm.em.fork({ disableContextResolution: true });
+    this.cls.set(this.key, em);
 
     const res = await next();
 
-    // No up-front `begin()`: the unit-of-work is flushed once, at the end, and ONLY on a successful
-    // envelope. The pipeline never throws — guard/validation/handler failures come back as
-    // `{ ok: false }` — so this drives the flush, not a try/catch. `flush()` wraps the pending changes
-    // in a single implicit transaction (atomic, no explicit `.save()`); a request that wrote nothing
-    // flushes nothing, so a read-only or DB-free dispatch opens no transaction and holds no connection
-    // across its work. An error envelope persists nothing — the fork is dropped with the scope, and
-    // nothing was ever flushed, so there is nothing to roll back. A failing `flush()` (e.g. a
-    // constraint violation) throws out of here; the pipeline maps it to an error code (ADR 0016 §2, §5).
+    // Flush once, at the end, ONLY on a successful envelope. The pipeline never throws — guard/
+    // validation/handler failures come back as `{ ok: false }` — so this drives the flush, not a
+    // try/catch. An error envelope persists nothing (the fork is dropped with the scope; nothing was
+    // flushed, nothing to roll back).
     if (res.ok) {
-      await em.flush();
+      // Dirty detection: compute the pending change sets first (in-memory — this opens NO transaction)
+      // and flush only if the request actually wrote through THIS connection. A read-only dispatch never
+      // begins a transaction, preserving the lazy-flush property (ADR 0016 §2). Change-set computation
+      // (not just the persist/remove stacks) is what catches a mutation to an already-loaded entity.
+      const uow = em.getUnitOfWork();
+      uow.computeChangeSets();
+      if (uow.getChangeSets().length > 0) {
+        // Write-once guard (Amendment 1 / decision 2C): a second connection written in one request has
+        // no cross-DB atomicity (MikroORM has no 2PC). Refuse loudly unless THIS connection opted into
+        // best-effort `multiWrite`. With a single connection `WROTE` is set once and never re-checked.
+        if (!this.multiWrite && this.cls.get(WROTE)) {
+          const message =
+            "@spinejs/mikro-orm: a second connection was written in one request. Cross-DB writes have " +
+            "no atomicity (no 2PC); opt in per connection with configure({ name, multiWrite: true }) to " +
+            "allow best-effort sequential flush.";
+          this.log.error(message, CONTEXT);
+          throw new Error(message);
+        }
+        this.cls.set(WROTE, true);
+        // `flush()` wraps the pending changes in a single implicit transaction (atomic, no `.save()`).
+        // A failing flush (e.g. a constraint violation) throws out of here; the pipeline maps it to an
+        // error code (ADR 0016 §2, §5).
+        await em.flush();
+      }
     }
     return res;
   }
