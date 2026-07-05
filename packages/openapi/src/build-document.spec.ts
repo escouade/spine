@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod/v4";
 import { Controller, getRoutes } from "@spinejs/gateway-core";
 import type {
   GatewayContext,
@@ -10,6 +11,7 @@ import {
   HttpGateway,
   ZodValidator,
   get,
+  post,
   sse,
 } from "@spinejs/http-gateway";
 import type {
@@ -35,6 +37,22 @@ function paths(
   doc: ReturnType<typeof build>
 ): Record<string, Record<string, Op>> {
   return doc.paths as unknown as Record<string, Record<string, Op>>;
+}
+
+const contextFactory = {
+  create: (honoCtx: HttpRaw): HttpBaseContext => ({ honoCtx }),
+};
+const noGuards = new Map<GuardConstructor, Guard<GatewayContext>>();
+
+/** Build a document from a single ad-hoc controller instance (for isolated edge-case routes). */
+function docFromController(controller: object) {
+  const gateway = new HttpGateway(
+    new ZodValidator(),
+    new DefaultHttpErrorMapper(),
+    contextFactory
+  );
+  gateway.register(getRoutes(controller, noGuards) as HttpRoute[]);
+  return buildOpenApiDocument(gateway.routes, config);
 }
 
 describe("buildOpenApiDocument", () => {
@@ -144,20 +162,75 @@ describe("buildOpenApiDocument", () => {
       stream = sse("/stream", {}, async function* () {});
       plain = get("/plain", {}, () => ({ ok: true }));
     }
-    const contextFactory = {
-      create: (honoCtx: HttpRaw): HttpBaseContext => ({ honoCtx }),
-    };
-    const noGuards = new Map<GuardConstructor, Guard<GatewayContext>>();
-    const gateway = new HttpGateway(
-      new ZodValidator(),
-      new DefaultHttpErrorMapper(),
-      contextFactory
-    );
-    gateway.register(
-      getRoutes(new StreamController(), noGuards) as HttpRoute[]
-    );
-
-    const doc = buildOpenApiDocument(gateway.routes, config);
+    const doc = docFromController(new StreamController());
     expect(Object.keys(doc.paths)).toEqual(["/plain"]);
+  });
+
+  it("does not surface author-provided examples at operation level", () => {
+    // The fixture's `findUser` route DOES set `examples` in its meta — the operation must still omit it.
+    const op = paths(build())["/users/{id}"].get;
+    expect(op.examples).toBeUndefined();
+  });
+
+  it("synthesizes a required path parameter for a :param route with no params schema", () => {
+    @Controller({})
+    class WidgetsController {
+      find = get("/widgets/:id", {}, () => ({ ok: true }));
+    }
+    const doc = docFromController(new WidgetsController());
+    const op = (doc.paths as Record<string, Record<string, Op>>)[
+      "/widgets/{id}"
+    ].get;
+    expect(op.parameters).toEqual([
+      { name: "id", in: "path", required: true, schema: { type: "string" } },
+    ]);
+  });
+
+  it("strips the $schema dialect marker from an inline requestBody schema", () => {
+    @Controller({})
+    class ThingsController {
+      create = post(
+        "/things",
+        { body: z.object({ name: z.string() }) },
+        () => ({
+          ok: true,
+        })
+      );
+    }
+    const doc = docFromController(new ThingsController());
+    const op = (doc.paths as Record<string, Record<string, Op>>)["/things"]
+      .post;
+    const schema = (
+      (
+        op.requestBody as Record<
+          string,
+          Record<string, Record<string, unknown>>
+        >
+      ).content["application/json"] as Record<string, unknown>
+    ).schema as Record<string, unknown>;
+    expect(schema.$schema).toBeUndefined();
+    expect(schema.type).toBe("object");
+  });
+
+  it("inlines a reused schema so no $ref dangles (relocation to components is Story 1.4)", () => {
+    const Inner = z.object({ x: z.string() });
+    @Controller({})
+    class ReuseController {
+      list = get("/reuse", { query: z.object({ a: Inner, b: Inner }) }, () => ({
+        ok: true,
+      }));
+    }
+    const doc = docFromController(new ReuseController());
+    const serialized = JSON.stringify(doc);
+    // Self-contained document: no unresolved $ref, no leftover $defs.
+    expect(serialized).not.toContain("$ref");
+    expect(serialized).not.toContain("$defs");
+    const params = (doc.paths as Record<string, Record<string, Op>>)["/reuse"]
+      .get.parameters as Array<Record<string, unknown>>;
+    expect(params.map((p) => p.name)).toEqual(["a", "b"]);
+    expect(params[0].schema).toMatchObject({
+      type: "object",
+      properties: { x: { type: "string" } },
+    });
   });
 });
