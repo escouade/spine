@@ -305,99 +305,6 @@ propre cycle de vie de connexion (connexion, connecté, tentative _N_, échec fi
 `logger` que vous passez dans les options de `configure()` l'emporte ; si aucun logger spine n'est
 disponible, le pont se dégrade en no-op et ne lève jamais.
 
-## Connexions multiples
-
-La plupart des apps n'ont qu'une base. Quand il en faut plusieurs — un replica de lecture, un store
-d'analytics ou d'audit séparé — donnez un `name` à chaque connexion **additionnelle**. La connexion par
-défaut (sans `name`) garde les tokens classe `MikroORM` / `EntityManager` et tout ce qui précède,
-inchangé ; une connexion nommée s'injecte via `mikroOrmRef(name)` / `entityManagerRef(name)` et apporte
-son **propre** cycle de vie connexion/fermeture et son retry.
-
-```typescript
-// modules/app.module.ts
-import { MikroOrmModule } from "@spinejs/mikro-orm";
-
-// La connexion par défaut — tokens classe, exactement comme avant.
-const primary = MikroOrmModule.configure({
-  driver: BetterSqliteDriver,
-  dbName: "app.sqlite",
-  entities: [UserSchema],
-});
-
-// Une connexion nommée — son propre cycle de vie, injectée par ref.
-const audit = MikroOrmModule.configure({
-  name: "audit",
-  driver: BetterSqliteDriver,
-  dbName: "audit.sqlite",
-  entities: [AuditLogSchema],
-});
-```
-
-Chaque connexion a son **propre** interceptor. Empilez sur le transport chacun de ceux que vous
-utilisez, après `ClsInterceptor` — chacun fork son propre `EntityManager` de requête dans son propre
-emplacement, si bien que les connexions ne croisent jamais leurs forks de requête :
-
-```typescript
-import { ClsInterceptor, ClsModule, ClsService } from "@spinejs/cls";
-import {
-  MikroOrmInterceptor,
-  mikroOrmInterceptorRef,
-} from "@spinejs/mikro-orm";
-
-HttpGatewayModule.configure({
-  imports: [ClsModule, primary, audit],
-  contextFactory: {
-    /* … */
-  },
-  interceptors: {
-    // `MikroOrmInterceptor` (token classe) est celui de la connexion par défaut ;
-    // `mikroOrmInterceptorRef("audit")` celui de la connexion nommée. Tous deux transport-agnostiques —
-    // ils entrent dans le tableau tels quels, sans cast.
-    inject: [ClsService, MikroOrmInterceptor, mikroOrmInterceptorRef("audit")],
-    factory: (cls, primaryTx, auditTx) => [
-      new ClsInterceptor(cls), // 1. ouvre la portée CLS
-      primaryTx, // 2. encadre l'unité de travail de la connexion par défaut
-      auditTx, // 3. encadre l'unité de travail de la connexion "audit"
-    ],
-  },
-});
-```
-
-Liez les repositories d'une feature à une connexion avec `register(..., { connection })`, et atteignez
-le repository par défaut d'une entité sur une connexion avec `repositoryOf(Entity, connection)` :
-
-```typescript
-// modules/audit/audit.module.ts
-@Module({
-  imports: [MikroOrmModule.register([AuditLog], { connection: "audit" })],
-})
-export class AuditModule {} // injecter repositoryOf(AuditLog, "audit")
-```
-
-### Écrire plus d'une connexion dans une requête
-
-On ne peut pas écrire deux bases de façon atomique — MikroORM n'a pas de commit à deux phases, et une
-transaction validée ne peut pas être annulée. Donc par défaut une requête écrit **au plus une**
-connexion : si l'unité de travail d'une seconde connexion est aussi modifiée, l'interceptor **lève**
-plutôt que de valider une écriture cross-base partielle.
-
-Quand vous acceptez ce compromis — par exemple une écriture principale plus une ligne d'audit
-best-effort — activez `multiWrite` sur **chaque** connexion participante :
-
-```typescript
-MikroOrmModule.configure({ name: "audit", multiWrite: true /* … */ });
-```
-
-Leurs unités de travail sont alors flushées **séquentiellement, best-effort** : si le second flush
-échoue, le premier est déjà validé. Il n'y a **aucune atomicité cross-base** — passez par un pattern
-saga / outbox quand vous en avez besoin.
-
-:::note
-Le `EntityManager` d'une connexion nommée touché dans une requête dont l'interceptor n'a **pas** été
-empilé lève un diagnostic de câblage — il refuse de retomber sur un manager partagé hors-portée (une
-fuite inter-requêtes). Empilez l'interceptor de chaque connexion que vous utilisez.
-:::
-
 ## Le câblage à la main (la factory) {#by-hand}
 
 `configure()` n'a rien de magique — c'est une petite composition DI inspectable : un provider de valeur
@@ -512,10 +419,11 @@ rien de `configure()` n'est caché.
 
 ## Limitations
 
-- **Aucune atomicité cross-base.** Les connexions multiples sont supportées (voir _Connexions
-  multiples_), mais une requête écrit **au plus une** connexion sauf si vous activez `multiWrite` — et
-  même là les écritures sont séquentielles best-effort, pas atomiques (MikroORM n'a pas de commit à deux
-  phases). Passez par un pattern saga / outbox quand il vous faut une vraie transaction cross-base.
+- **Une seule connexion par app.** `MikroOrmModule.configure()` possède une unique connexion MikroORM
+  pour toute l'app — l'importer (ou appeler `configure()`) plusieurs fois résout la **même** instance.
+  Un second `configure({...})` avec des options _différentes_ est ignoré en silence (les premières
+  options gagnent) ; ce package ne modélise pas plusieurs bases simultanées. Un seul `configure()` à la
+  racine de l'app.
 - **Épinglez `@mikro-orm/core` et son driver sur le même major.** La résolution des repositories repose
   sur `instanceof EntityRepository` et une table de tokens par entité, toutes deux sensibles à
   l'identité. Une copie **dupliquée** de `@mikro-orm/core` dans l'arbre (un driver sur un autre major,
@@ -530,18 +438,14 @@ rien de `configure()` n'est caché.
 
 ### `MikroOrmModule.configure(options)`
 
-Enregistre une connexion : construit `MikroORM` au build du module, connecte sur `onStart` (avec
-retry), ferme sur `onStop`. Sans `name` c'est la connexion **par défaut** (tokens classe `MikroORM` /
-`EntityManager`) ; avec un `name` c'est une connexion additionnelle (`mikroOrmRef(name)` etc.) avec son
-propre cycle de vie (voir _Connexions multiples_). `options` est le `Options` de MikroORM (tout —
-`driver`, `dbName`, `entities`, `pool`, `logger`, `debug`, …) plus des champs ajoutés par spine :
+Enregistre l'unique connexion au niveau de l'app : construit `MikroORM` au build du module, connecte
+sur `onStart` (avec retry), ferme sur `onStop`. `options` est le `Options` de MikroORM (tout — `driver`,
+`dbName`, `entities`, `pool`, `logger`, `debug`, …) plus un champ ajouté par spine :
 
-| Option       | Type                   | Défaut          | Signification                                                                                |
-| ------------ | ---------------------- | --------------- | -------------------------------------------------------------------------------------------- |
-| `retry`      | `Partial<RetryPolicy>` | `DEFAULT_RETRY` | Politique de retry au démarrage (ci-dessous).                                                |
-| `name`       | `string`               | _(par défaut)_  | Enregistre une connexion nommée, injectée via `mikroOrmRef(name)` / `entityManagerRef`.      |
-| `multiWrite` | `boolean`              | `false`         | Autorise l'écriture de cette connexion aux côtés d'une autre dans une requête (best-effort). |
-| _(reste)_    | `Options` MikroORM     | —               | Driver, `dbName`, `entities`, pool, logs.                                                    |
+| Option    | Type                   | Défaut          | Signification                                 |
+| --------- | ---------------------- | --------------- | --------------------------------------------- |
+| `retry`   | `Partial<RetryPolicy>` | `DEFAULT_RETRY` | Politique de retry au démarrage (ci-dessous). |
+| _(reste)_ | `Options` MikroORM     | —               | Driver, `dbName`, `entities`, pool, logs.     |
 
 `RetryPolicy` et ses défauts (`DEFAULT_RETRY`) :
 
@@ -562,17 +466,14 @@ Expose les repositories d'un module, chacun injectable par token. Chaque entrée
   **doit** donc le déclarer ; soit
 - une **classe d'entité** — expose l'`EntityRepository<Entity>` par défaut sous `repositoryOf(Entity)`.
 
-Appelez-le dans chaque module de feature qui a besoin d'accéder aux données. Passez `{ connection }`
-(le second argument) pour lier les repositories à une connexion **nommée** ; omis, ils se lient à la
-connexion par défaut.
+Fusionne dans l'unique nœud `MikroOrmModule` ; appelez-le dans chaque module de feature qui a besoin
+d'accéder aux données.
 
-### `repositoryOf(entity, connection?)`
+### `repositoryOf(entity)`
 
 Retourne un `InjectionToken<EntityRepository<E>>` stable et typé pour une entité qui n'a pas besoin de
 classe de repository personnalisée. `repositoryOf(User) === repositoryOf(User)` — le même token le
-fournit et l'injecte. À combiner avec `register([User])`. `connection` namespace le token par nom de
-connexion (l'identité est `(entity, connection)`) ; omis (ou `"default"`) donne le token de la
-connexion par défaut.
+fournit et l'injecte. À combiner avec `register([User])`.
 
 ### `MikroOrmInterceptor`
 
@@ -583,18 +484,10 @@ du transport **après** `ClsInterceptor` — il doit s'exécuter à l'intérieur
 transport-agnostique : ajoutez-le au tableau `interceptors` **tel quel** — le slot est un
 `ChainInterceptor` dont l'union admet un interceptor de base, donc aucun cast ni enveloppe n'est requis.
 
-### Tokens de connexion nommée
-
-`mikroOrmRef(name)`, `entityManagerRef(name)` et `mikroOrmInterceptorRef(name)` sont des tokens
-d'injection stables et typés pour le `MikroORM`, l'`EntityManager` de requête et l'interceptor d'une
-connexion nommée. Chacun mémoïse par nom — `mikroOrmRef("audit") === mikroOrmRef("audit")` — donc un
-provider et un site `inject:` partagent l'identité. `mikroOrmRef("default")` (le `DEFAULT_CONNECTION`
-exporté) résout la même instance que le token classe `MikroORM`.
-
 ### Ré-exports et briques de la factory
 
 Le package ré-exporte les primitives MikroORM dont vous avez besoin, pour que les entités et
 l'injection dépendent de `@spinejs/mikro-orm` seul : **`MikroORM`**, **`EntityManager`**,
 **`EntitySchema`**, **`EntityRepository`**, et le type **`Options`**. Pour le câblage à la main il
 exporte aussi **`mikroOrmProvider`**, **`entityManagerProvider`** et **`connectWithRetry`** (voir
-[Le câblage à la main](#by-hand)), plus **`DEFAULT_RETRY`** et **`DEFAULT_CONNECTION`**.
+[Le câblage à la main](#by-hand)), plus **`DEFAULT_RETRY`**.

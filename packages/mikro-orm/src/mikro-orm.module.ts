@@ -1,7 +1,6 @@
 import {
   DynamicModule,
   FactoryProvider,
-  InjectionToken,
   Logger,
   Module,
   OnStart,
@@ -24,14 +23,9 @@ import {
   type RepositoryRegistration,
 } from "./mikro-orm.repository";
 import {
-  DEFAULT_CONNECTION,
   DEFAULT_RETRY,
   EM,
-  emKey,
-  entityManagerRef,
-  mikroOrmInterceptorRef,
   mikroOrmOptionsToken,
-  mikroOrmRef,
   retryPolicyToken,
   type MikroOrmModuleOptions,
   type RetryPolicy,
@@ -44,36 +38,18 @@ const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Builds the `MikroORM` factory for one connection: constructs (does **not** connect) the instance at
- * module build, wiring spine's CLS as MikroORM's context store under THIS connection's key
- * (`context: () => cls.get(emKey(name))`, ADR 0016 §1 / Amendment 1). `initSync` defers the actual
+ * Constructs (does **not** connect) the `MikroORM` instance at module build, wiring spine's CLS as
+ * MikroORM's context store (`context: () => cls.get(EM)`, ADR 0016 §1). `initSync` defers the actual
  * connection to `onStart` — the deterministic lifecycle window of ADR 0010.
- *
- * For a **named** connection the `context` hook **throws** when a request scope is active but this
- * connection's fork is absent: that means its `MikroOrmInterceptor` was not stacked, and without the
- * throw MikroORM would silently fall back to the root manager — request A's data leaking into request B
- * on that connection (Amendment 1, mandatory leak mitigation). The default connection keeps the plain,
- * non-throwing hook so its behaviour is byte-for-byte unchanged.
  */
-const ormFactory =
-  (name: string) =>
-  (cls: ClsService, options: Options, log?: Logger): MikroORM => {
-    const key = emKey(name);
-    const guardMissingFork = name !== DEFAULT_CONNECTION;
+export const mikroOrmProvider: FactoryProvider<MikroORM> = {
+  provide: MikroORM,
+  inject: [ClsService, mikroOrmOptionsToken, loggerToken],
+  factory: (cls: ClsService, options: Options, log?: Logger): MikroORM => {
     const base: Options = {
       ...options,
       // The load-bearing fact: one AsyncLocalStorage (spine's) backs the request-scoped EntityManager.
-      context: () => {
-        const em = cls.get(key) as EntityManager | undefined;
-        if (!em && guardMissingFork && cls.active) {
-          throw new Error(
-            `@spinejs/mikro-orm: connection "${name}" is used inside a request but its request fork is ` +
-              `absent — its interceptor is not stacked. Add mikroOrmInterceptorRef("${name}") to the ` +
-              `transport's interceptors (after ClsInterceptor).`
-          );
-        }
-        return em;
-      },
+      context: () => cls.get(EM) as EntityManager | undefined,
     };
     // Bridge MikroORM's logging to the spine logger — one sink, with severity preserved and ANSI
     // stripped (ADR 0016 §5, see SpineMikroLogger). A user-supplied `logger`/`loggerFactory` wins; with
@@ -85,17 +61,7 @@ const ormFactory =
       });
     }
     return MikroORM.initSync(base);
-  };
-
-/**
- * The default connection's `MikroORM` provider (class token). Exported so tests and hand-wiring can call
- * `mikroOrmProvider.factory(cls, options, log)` directly (ADR 0016 §6). Named connections use
- * {@link ormFactory} through `configure({ name })`.
- */
-export const mikroOrmProvider: FactoryProvider<MikroORM> = {
-  provide: MikroORM,
-  inject: [ClsService, mikroOrmOptionsToken, loggerToken],
-  factory: ormFactory(DEFAULT_CONNECTION),
+  },
 };
 
 /**
@@ -167,72 +133,10 @@ export async function connectWithRetry(
  * Internal per-registration feature module. `register()` returns it as a **`fresh`** DynamicModule, so
  * each call is an ISOLATED node (identity = the DynamicModule object, not this class): its repository
  * tokens are exported only to the importing module and do **not** accumulate on the shared connection
- * node. It imports the connection so the shared `MikroORM` resolves the repositories.
+ * node. It imports `MikroOrmModule` so the one shared `MikroORM` connection resolves the repositories.
  */
 @Module({})
 class MikroOrmRepositoriesModule {}
-
-/**
- * Per-node bundle carrying what a named connection's lifecycle needs (its own `MikroORM` + retry policy)
- * to the {@link NamedMikroOrmConnection} class. Its identity is fixed (the class's `@Module` inject is
- * static), but each `fresh` named node provides its OWN value into its OWN container (module-loader
- * gives every node a private `Container`), so N named connections never share a spec.
- */
-const connectionSpecToken = new InjectionToken<{
-  orm: MikroORM;
-  retry: RetryPolicy;
-}>("mikro-orm.connection-spec");
-
-/**
- * Lifecycle owner for a **named** connection (ADR 0016, Amendment 1). Mirrors {@link MikroOrmModule}'s
- * own lifecycle (connect-with-retry on start, close on stop, never-connected guard) but for the
- * per-connection `MikroORM` it receives via {@link connectionSpecToken}. Reused across all named nodes;
- * `fresh: true` on each node makes the loader build a distinct instance per connection.
- */
-@Module({ inject: [connectionSpecToken, loggerToken] })
-class NamedMikroOrmConnection implements OnStart, OnStop {
-  private connected = false;
-
-  constructor(
-    private readonly spec: { orm: MikroORM; retry: RetryPolicy },
-    private readonly log: Logger
-  ) {}
-
-  async onStart(): Promise<void> {
-    await connectWithRetry(this.spec.orm, this.spec.retry, this.log);
-    this.connected = true;
-  }
-
-  async onStop(): Promise<void> {
-    if (!this.connected) return;
-    this.log.debug("Closing the database connection", CONTEXT);
-    try {
-      await this.spec.orm.close(true);
-    } catch (err) {
-      this.log.error(
-        `Failed to close the database connection: ${String(err)}`,
-        CONTEXT
-      );
-    }
-  }
-}
-
-/**
- * Memoized `fresh` DynamicModule per connection name — the SAME object every call. `configure({ name })`
- * fills it (module, providers, exports); `register(…, { connection })` imports it. Sharing one object
- * makes the two order-independent (whichever runs first creates the shell, the other reuses it) and, per
- * spine's "same DynamicModule imported twice is shared" rule, keeps the connection a single instance
- * even when imported at the app root, on a transport, and by a feature's `register()`.
- */
-const connectionNodes = new Map<string, DynamicModule>();
-const connectionNode = (name: string): DynamicModule => {
-  let node = connectionNodes.get(name);
-  if (!node) {
-    node = { module: NamedMikroOrmConnection, fresh: true };
-    connectionNodes.set(name, node);
-  }
-  return node;
-};
 
 /**
  * Owns the database connection for a spine app. `MikroOrmModule.configure(options)` registers a single
@@ -289,62 +193,13 @@ export class MikroOrmModule implements OnStart, OnStop {
   }
 
   /**
-   * Configures a connection, at app level:
+   * Configures the connection once, at app level:
    * `imports: [MikroOrmModule.configure({ driver, dbName, entities, retry })]`.
-   *
-   * With **no `name`** this is the default connection — exposed by the `MikroORM` / `EntityManager`
-   * **class tokens** and the `MikroOrmInterceptor` class token, exactly as before. Pass a **`name`**
-   * (ADR 0016, Amendment 1) to register an additional connection, exposed by `mikroOrmRef(name)` /
-   * `entityManagerRef(name)` / `mikroOrmInterceptorRef(name)`, with its own connect/close lifecycle and
-   * retry. `multiWrite: true` lets that connection be written in a request that already wrote another —
-   * best-effort, no cross-DB atomicity (see {@link MikroOrmInterceptor}). Repeated calls with the same
-   * `name` return the same module.
    */
   static configure(options: MikroOrmModuleOptions): DynamicModule {
-    const { retry, name, multiWrite = false, ...ormOptions } = options;
+    const { retry, ...ormOptions } = options;
     const resolvedRetry: RetryPolicy = { ...DEFAULT_RETRY, ...retry };
 
-    // Named connection: its own `fresh` node (memoized by name), tokens, lifecycle + retry, interceptor.
-    if (name !== undefined && name !== DEFAULT_CONNECTION) {
-      const ormRef = mikroOrmRef(name);
-      const node = connectionNode(name);
-      node.imports = [ClsModule];
-      node.providers = [
-        {
-          provide: ormRef,
-          inject: [ClsService, loggerToken],
-          factory: (cls: ClsService, log?: Logger) =>
-            ormFactory(name)(cls, ormOptions, log),
-        },
-        {
-          provide: entityManagerRef(name),
-          inject: [ormRef],
-          factory: (orm: MikroORM) => orm.em,
-        },
-        {
-          provide: mikroOrmInterceptorRef(name),
-          inject: [ormRef, ClsService, loggerToken],
-          factory: (orm: MikroORM, cls: ClsService, log: Logger) =>
-            new MikroOrmInterceptor(orm, cls, log, emKey(name), multiWrite),
-        },
-        {
-          // Feeds the fresh node's own lifecycle instance (see NamedMikroOrmConnection).
-          provide: connectionSpecToken,
-          inject: [ormRef],
-          factory: (orm: MikroORM) => ({ orm, retry: resolvedRetry }),
-        },
-      ];
-      node.exports = [
-        ormRef,
-        entityManagerRef(name),
-        mikroOrmInterceptorRef(name),
-      ];
-      return node;
-    }
-
-    // Default connection: the unchanged class-token path, plus name-based aliases so `mikroOrmRef("default")`
-    // (and the em/interceptor refs) resolve the very same instances — uniform code can address any
-    // connection by name, the default included.
     return {
       module: MikroOrmModule,
       // ClsModule provides the single `ClsService` the factory's `context` hook and the interceptor
@@ -355,36 +210,9 @@ export class MikroOrmModule implements OnStart, OnStop {
         { provide: retryPolicyToken, value: resolvedRetry },
         mikroOrmProvider,
         entityManagerProvider,
-        {
-          provide: MikroOrmInterceptor,
-          inject: [MikroORM, ClsService, loggerToken],
-          factory: (orm: MikroORM, cls: ClsService, log: Logger) =>
-            new MikroOrmInterceptor(orm, cls, log, EM, multiWrite),
-        },
-        {
-          provide: mikroOrmRef(DEFAULT_CONNECTION),
-          inject: [MikroORM],
-          factory: (orm: MikroORM) => orm,
-        },
-        {
-          provide: entityManagerRef(DEFAULT_CONNECTION),
-          inject: [EntityManager],
-          factory: (em: EntityManager) => em,
-        },
-        {
-          provide: mikroOrmInterceptorRef(DEFAULT_CONNECTION),
-          inject: [MikroOrmInterceptor],
-          factory: (interceptor: MikroOrmInterceptor) => interceptor,
-        },
-      ],
-      exports: [
-        MikroORM,
-        EntityManager,
         MikroOrmInterceptor,
-        mikroOrmRef(DEFAULT_CONNECTION),
-        entityManagerRef(DEFAULT_CONNECTION),
-        mikroOrmInterceptorRef(DEFAULT_CONNECTION),
       ],
+      exports: [MikroORM, EntityManager, MikroOrmInterceptor],
     };
   }
 
@@ -399,39 +227,22 @@ export class MikroOrmModule implements OnStart, OnStop {
    *
    * Each call is **isolated** (a `fresh` node): its repo tokens are visible only to the module that
    * imports this `register(...)`, never to sibling modules. The connection stays shared — the fresh node
-   * imports the connection module, so there is still one `MikroORM` instance and repos resolve the
-   * request fork. A feature module that also needs `EntityManager`/`MikroOrmInterceptor` imports the
-   * connection too.
-   *
-   * `opts.connection` (ADR 0016, Amendment 1) binds the repositories to a **named** connection — the
-   * factories inject `mikroOrmRef(connection)` and `repositoryOf` namespaces the token by connection.
-   * Omit it (or pass `"default"`) for the default connection, unchanged.
+   * imports `MikroOrmModule`, so there is still one `MikroORM` instance and repos resolve the request
+   * fork. A feature module that also needs `EntityManager`/`MikroOrmInterceptor` imports `MikroOrmModule`.
    */
-  static register(
-    items: RepositoryRegistration[],
-    opts: { connection?: string } = {}
-  ): DynamicModule {
-    const connection = opts.connection ?? DEFAULT_CONNECTION;
-    const isDefault = connection === DEFAULT_CONNECTION;
-    // Default → the `MikroORM` class token + the `MikroOrmModule` class import (as before). Named → that
-    // connection's `mikroOrmRef` + its memoized fresh node (the same object `configure({ name })` fills).
-    const ormToken = isDefault ? MikroORM : mikroOrmRef(connection);
-    const connectionImport: DynamicModule | typeof MikroOrmModule = isDefault
-      ? MikroOrmModule
-      : connectionNode(connection);
-
+  static register(items: RepositoryRegistration[]): DynamicModule {
     const providers = items.map(
       (item): FactoryProvider<EntityRepository<object>> =>
         isRepositoryClass(item)
           ? {
               provide: item,
-              inject: [ormToken],
+              inject: [MikroORM],
               factory: (orm: MikroORM) =>
                 orm.em.getRepository(entityForRepository(orm, item)),
             }
           : {
-              provide: repositoryOf(item, connection),
-              inject: [ormToken],
+              provide: repositoryOf(item),
+              inject: [MikroORM],
               factory: (orm: MikroORM) => orm.em.getRepository(item),
             }
     );
@@ -440,8 +251,8 @@ export class MikroOrmModule implements OnStart, OnStop {
       module: MikroOrmRepositoriesModule,
       // `fresh` → a distinct node per call: repo tokens do NOT leak to other modules (feature isolation).
       fresh: true,
-      // Share the connection so `MikroORM`/`EntityManager` resolve (one instance, request fork).
-      imports: [connectionImport],
+      // Share the single connection so `MikroORM`/`EntityManager` resolve (one instance, request fork).
+      imports: [MikroOrmModule],
       providers,
       exports: providers.map((p) => p.provide),
     };

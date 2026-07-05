@@ -295,98 +295,6 @@ The module bridges MikroORM's own output (queries under `debug`, connection even
 `configure()` options wins; if no spine logger is available the bridge degrades to a no-op and never
 throws.
 
-## Multiple connections
-
-Most apps need one database. When you need more than one — a read replica, a separate analytics or
-audit store — give each **additional** connection a `name`. The default connection (no `name`) keeps
-the `MikroORM` / `EntityManager` class tokens and everything above unchanged; a named one is injected
-through `mikroOrmRef(name)` / `entityManagerRef(name)` and brings its **own** connect/close lifecycle
-and retry.
-
-```typescript
-// modules/app.module.ts
-import { MikroOrmModule } from "@spinejs/mikro-orm";
-
-// The default connection — class tokens, exactly as before.
-const primary = MikroOrmModule.configure({
-  driver: BetterSqliteDriver,
-  dbName: "app.sqlite",
-  entities: [UserSchema],
-});
-
-// A named connection — its own lifecycle, injected by ref.
-const audit = MikroOrmModule.configure({
-  name: "audit",
-  driver: BetterSqliteDriver,
-  dbName: "audit.sqlite",
-  entities: [AuditLogSchema],
-});
-```
-
-Each connection has its **own** interceptor. Stack every one you use on the transport, after
-`ClsInterceptor` — each forks its own request `EntityManager` into its own slot, so the connections
-never cross request forks:
-
-```typescript
-import { ClsInterceptor, ClsModule, ClsService } from "@spinejs/cls";
-import {
-  MikroOrmInterceptor,
-  mikroOrmInterceptorRef,
-} from "@spinejs/mikro-orm";
-
-HttpGatewayModule.configure({
-  imports: [ClsModule, primary, audit],
-  contextFactory: {
-    /* … */
-  },
-  interceptors: {
-    // `MikroOrmInterceptor` (class token) is the default connection's; `mikroOrmInterceptorRef("audit")`
-    // is the named one. Both are transport-agnostic — they drop into the array as-is, no cast.
-    inject: [ClsService, MikroOrmInterceptor, mikroOrmInterceptorRef("audit")],
-    factory: (cls, primaryTx, auditTx) => [
-      new ClsInterceptor(cls), // 1. opens the CLS scope
-      primaryTx, // 2. brackets the default connection's unit-of-work
-      auditTx, // 3. brackets the "audit" connection's unit-of-work
-    ],
-  },
-});
-```
-
-Bind a feature's repositories to a connection with `register(..., { connection })`, and reach an
-entity's default repository on a connection with `repositoryOf(Entity, connection)`:
-
-```typescript
-// modules/audit/audit.module.ts
-@Module({
-  imports: [MikroOrmModule.register([AuditLog], { connection: "audit" })],
-})
-export class AuditModule {} // inject repositoryOf(AuditLog, "audit")
-```
-
-### Writing more than one connection in a request
-
-Two databases cannot be written atomically — MikroORM has no two-phase commit, and a committed
-transaction cannot be un-done. So by default a request writes **at most one** connection: if a second
-connection's unit-of-work is also dirty, the interceptor **throws** rather than commit a partial
-cross-database write.
-
-When you accept that trade-off — say a primary write plus a best-effort audit row — opt **every**
-participating connection into `multiWrite`:
-
-```typescript
-MikroOrmModule.configure({ name: "audit", multiWrite: true /* … */ });
-```
-
-Their units of work then flush **sequentially, best-effort**: if the second flush fails, the first is
-already committed. There is **no cross-database atomicity** — reach for a saga / outbox pattern when
-you need it.
-
-:::note
-A named connection's `EntityManager` touched inside a request whose interceptor was **not** stacked
-throws a wiring diagnostic — it refuses to fall back to a shared, unscoped manager (a cross-request
-leak). Stack every connection's interceptor you use.
-:::
-
 ## Wiring it by hand (the factory) {#by-hand}
 
 `configure()` is not magic — it is a small, inspectable DI composition: a value provider for the
@@ -501,10 +409,10 @@ nothing about `configure()` is hidden.
 
 ## Limitations
 
-- **No cross-database atomicity.** Multiple connections are supported (see _Multiple connections_), but
-  a request writes **at most one** connection unless you opt into `multiWrite` — and even then the
-  writes are best-effort sequential, not atomic (MikroORM has no two-phase commit). Reach for a saga /
-  outbox pattern when you need a real cross-database transaction.
+- **One connection per app.** `MikroOrmModule.configure()` owns a single MikroORM connection for the
+  whole app — importing it (or calling `configure()`) more than once resolves the **same** instance. A
+  second `configure({...})` with _different_ options is silently ignored (the first options win); this
+  package does not model multiple simultaneous databases. Use one `configure()` at the app root.
 - **Pin `@mikro-orm/core` and its driver to the same major.** Repository resolution relies on
   `instanceof EntityRepository` and a per-entity token map, both identity-sensitive. A **duplicated**
   `@mikro-orm/core` in the tree (a driver on a different major, a version skew) yields a second
@@ -518,18 +426,14 @@ nothing about `configure()` is hidden.
 
 ### `MikroOrmModule.configure(options)`
 
-Registers a connection: constructs `MikroORM` at module build, connects on `onStart` (with retry),
-closes on `onStop`. With no `name` it is the **default** connection (`MikroORM` / `EntityManager` class
-tokens); with a `name` it is an additional connection (`mikroOrmRef(name)` etc.) with its own lifecycle
-(see _Multiple connections_). `options` is MikroORM's `Options` (all of it — `driver`, `dbName`,
-`entities`, `pool`, `logger`, `debug`, …) plus spine-added fields:
+Registers the single app-level connection: constructs `MikroORM` at module build, connects on
+`onStart` (with retry), closes on `onStop`. `options` is MikroORM's `Options` (all of it — `driver`,
+`dbName`, `entities`, `pool`, `logger`, `debug`, …) plus one spine-added field:
 
-| Option       | Type                   | Default         | Meaning                                                                                |
-| ------------ | ---------------------- | --------------- | -------------------------------------------------------------------------------------- |
-| `retry`      | `Partial<RetryPolicy>` | `DEFAULT_RETRY` | Startup connect-retry policy (below).                                                  |
-| `name`       | `string`               | _(default)_     | Register as a named connection, injected via `mikroOrmRef(name)` / `entityManagerRef`. |
-| `multiWrite` | `boolean`              | `false`         | Allow this connection to be written alongside another in one request (best-effort).    |
-| _(rest)_     | MikroORM `Options`     | —               | Driver, `dbName`, `entities`, pool, logging.                                           |
+| Option   | Type                   | Default         | Meaning                                      |
+| -------- | ---------------------- | --------------- | -------------------------------------------- |
+| `retry`  | `Partial<RetryPolicy>` | `DEFAULT_RETRY` | Startup connect-retry policy (below).        |
+| _(rest)_ | MikroORM `Options`     | —               | Driver, `dbName`, `entities`, pool, logging. |
 
 `RetryPolicy` and its defaults (`DEFAULT_RETRY`):
 
@@ -550,15 +454,13 @@ Exposes a module's repositories, each injectable by token. Each entry is either:
   it; or
 - an **entity class** — exposes the default `EntityRepository<Entity>` under `repositoryOf(Entity)`.
 
-Call it in every feature module that needs data access. Pass `{ connection }` (the second argument) to
-bind the repositories to a **named** connection; omitted, they bind to the default one.
+Merges into the single `MikroOrmModule` node; call it in every feature module that needs data access.
 
-### `repositoryOf(entity, connection?)`
+### `repositoryOf(entity)`
 
 Returns a stable, typed `InjectionToken<EntityRepository<E>>` for an entity that needs no custom
 repository class. `repositoryOf(User) === repositoryOf(User)` — the same token provides and injects.
-Pair with `register([User])`. `connection` namespaces the token by connection name (identity is
-`(entity, connection)`); omitted (or `"default"`) gives the default connection's token.
+Pair with `register([User])`.
 
 ### `MikroOrmInterceptor`
 
@@ -569,18 +471,10 @@ nothing opens no transaction). Register it in the transport's `configure({ inter
 `interceptors` array **as-is** — the slot is a `ChainInterceptor` whose union admits a base
 interceptor, so no cast or wrapper is needed.
 
-### Named-connection tokens
-
-`mikroOrmRef(name)`, `entityManagerRef(name)`, and `mikroOrmInterceptorRef(name)` are stable, typed
-injection tokens for a named connection's `MikroORM`, request `EntityManager`, and interceptor. Each
-memoizes by name — `mikroOrmRef("audit") === mikroOrmRef("audit")` — so a provider and an `inject:`
-site share identity. `mikroOrmRef("default")` (the exported `DEFAULT_CONNECTION`) resolves the same
-instance as the `MikroORM` class token.
-
 ### Re-exports and factory building blocks
 
 The package re-exports the MikroORM primitives you need, so entities and injection depend on
 `@spinejs/mikro-orm` alone: **`MikroORM`**, **`EntityManager`**, **`EntitySchema`**,
 **`EntityRepository`**, and the **`Options`** type. For hand-wiring it also exports
 **`mikroOrmProvider`**, **`entityManagerProvider`**, and **`connectWithRetry`** (see
-[Wiring it by hand](#by-hand)), plus **`DEFAULT_RETRY`** and **`DEFAULT_CONNECTION`**.
+[Wiring it by hand](#by-hand)), plus **`DEFAULT_RETRY`**.

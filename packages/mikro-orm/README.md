@@ -108,20 +108,15 @@ interceptors: {
 
 ## Reference
 
-- **`MikroOrmModule.configure(options)`** — registers a connection; `options` are MikroORM `Options` plus an optional `retry: { attempts, delayMs, backoff }`. Constructs at build, connects on `onStart` (with retry), closes on `onStop`. Pass `name` for an additional (named) connection and `multiWrite` to let it be written alongside another (see Multiple connections).
-- **`MikroOrmModule.register([...], { connection? })`** — exposes a module's repositories: a custom `EntityRepository` subclass (by class token) or an entity class (default repo via `repositoryOf`). `connection` binds them to a named connection.
-- **`repositoryOf(Entity, connection?)`** — a typed `InjectionToken<EntityRepository<Entity>>` for entities with no custom repository; `connection` namespaces the token by connection.
-- **`mikroOrmRef(name)` / `entityManagerRef(name)` / `mikroOrmInterceptorRef(name)`** — injection tokens for a named connection's `MikroORM`, request `EntityManager`, and interceptor.
+- **`MikroOrmModule.configure(options)`** — registers the connection; `options` are MikroORM `Options` plus an optional `retry: { attempts, delayMs, backoff }`. Constructs at build, connects on `onStart` (with retry), closes on `onStop`.
+- **`MikroOrmModule.register([...])`** — exposes a module's repositories: a custom `EntityRepository` subclass (by class token) or an entity class (default repo via `repositoryOf`).
+- **`repositoryOf(Entity)`** — a typed `InjectionToken<EntityRepository<Entity>>` for entities with no custom repository.
 - **`MikroOrmInterceptor`** — forks a per-request `EntityManager` into CLS and `flush()`es it once at request end on a successful envelope (no up-front `begin()`; a request that wrote nothing opens no transaction). Transport-agnostic: add it to the `interceptors` array as-is — the slot is a `ChainInterceptor` whose union admits a base interceptor, so no cast is needed.
 - Re-exports `MikroORM`, `EntityManager`, `EntitySchema`, `EntityRepository`, and the `Options` type from `@mikro-orm/core`; plus `mikroOrmProvider` / `entityManagerProvider` / `connectWithRetry` for hand-wiring.
 
-## Multiple connections
-
-One database is the default (class tokens, everything above). For more — a replica, an audit store — give each additional connection a `name`; it is injected via `mikroOrmRef(name)` and brings its own lifecycle. Stack each connection's interceptor (`mikroOrmInterceptorRef(name)`) on the transport. A request writes **at most one** connection unless the connections opt into `multiWrite` (then best-effort sequential — **no cross-DB atomicity**).
-
 ## Limitations
 
-- **No cross-database atomicity** — multiple connections are supported, but a request writes at most one unless you opt into `multiWrite`, and even then flushes are best-effort sequential (no two-phase commit).
+- **One connection per app** — `configure()` is single-connection by design; a second `configure()` with different options is silently ignored (no multi-database).
 - **Pin `@mikro-orm/core` + driver to one major** (v6 today) — a duplicated core copy breaks repository resolution (`instanceof` / token identity).
 - **`MikroOrmInterceptor` needs an active CLS scope** — register it after `ClsInterceptor`; outside a scope it fails fast with an explicit diagnostic.
 

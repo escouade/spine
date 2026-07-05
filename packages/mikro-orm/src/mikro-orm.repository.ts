@@ -5,7 +5,6 @@ import {
   type EntityClass,
   type EntityName,
 } from "@mikro-orm/core";
-import { DEFAULT_CONNECTION } from "./mikro-orm.options";
 
 /**
  * A custom repository class — a subclass of MikroORM's `EntityRepository`, the home for custom queries
@@ -27,12 +26,11 @@ export type RepositoryRegistration =
   | EntityRepositoryClass
   | EntityClass<object>;
 
-// Stable token per (connection, entity), so `repositoryOf(E, conn)` returns the same token every call —
-// a value provider and an `inject:` site therefore resolve the same token. One WeakMap<entity> per
-// connection name; the default connection's map yields the SAME tokens as before (back-compat).
-const repositoryTokens = new Map<
-  string,
-  WeakMap<object, InjectionToken<EntityRepository<object>>>
+// Stable token per entity class, so `repositoryOf(E)` returns the same token every call — a value
+// provider and an `inject:` site therefore resolve the same token.
+const repositoryTokens = new WeakMap<
+  object,
+  InjectionToken<EntityRepository<object>>
 >();
 
 /**
@@ -40,27 +38,16 @@ const repositoryTokens = new Map<
  * repository class (ADR 0016 §3). `repositoryOf(User) === repositoryOf(User)` — stable identity — so it
  * both provides and injects the same token. Register the entity with `MikroOrmModule.register([User])`;
  * a provider then injects `[repositoryOf(User)]` and receives a request-scoped `EntityRepository<User>`.
- *
- * `connection` (ADR 0016, Amendment 1) namespaces the token by connection name: identity is
- * `(entity, connection)`, so the same entity on two connections yields two tokens. Omitted (or
- * `"default"`) → the same token as before, bound to the default connection.
  */
 export function repositoryOf<E extends object>(
-  entity: EntityClass<E>,
-  connection: string = DEFAULT_CONNECTION
+  entity: EntityClass<E>
 ): InjectionToken<EntityRepository<E>> {
-  let byEntity = repositoryTokens.get(connection);
-  if (!byEntity) {
-    byEntity = new WeakMap();
-    repositoryTokens.set(connection, byEntity);
-  }
-  let token = byEntity.get(entity);
+  let token = repositoryTokens.get(entity);
   if (!token) {
-    const suffix = connection === DEFAULT_CONNECTION ? "" : `@${connection}`;
     token = new InjectionToken<EntityRepository<object>>(
-      `repositoryOf(${entity.name}${suffix})`
+      `repositoryOf(${entity.name})`
     );
-    byEntity.set(entity, token);
+    repositoryTokens.set(entity, token);
   }
   return token as InjectionToken<EntityRepository<E>>;
 }
