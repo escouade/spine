@@ -1,6 +1,6 @@
 {
   "name": "@spinejs/http-gateway",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "HTTP gateway for SpineJS built on Hono.",
   "keywords": [
     "spinejs",

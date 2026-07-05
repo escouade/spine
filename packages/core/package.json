@@ -1,6 +1,6 @@
 {
   "name": "@spinejs/core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Dependency injection and module system at the core of SpineJS.",
   "keywords": [
     "spinejs",

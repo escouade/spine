@@ -1,3 +1,35 @@
+## 0.1.2 (2026-07-05)
+
+### 🚀 Features
+
+- **examples:** request-scoped unit-of-work example for @spinejs/mikro-orm ([931e438](https://github.com/escouade/spine/commit/931e438))
+- **gateway,openapi:** foundation seams for the OpenAPI battery ([f780b6d](https://github.com/escouade/spine/commit/f780b6d))
+- **mikro-orm:** request-scoped MikroORM integration [stories 1.1-1.3] ([458bdeb](https://github.com/escouade/spine/commit/458bdeb))
+- **mikro-orm:** repositories, logging bridge, integration tests [stories 1.4-1.6] ([80cb155](https://github.com/escouade/spine/commit/80cb155))
+- **mikro-orm:** asInterceptor() helper for a transport's typed slot ([58a10bc](https://github.com/escouade/spine/commit/58a10bc))
+- **mikro-orm:** named multi-connection support (ADR 0016 Amendment 1) ([bbe5825](https://github.com/escouade/spine/commit/bbe5825))
+- **openapi:** scaffold @spinejs/openapi + ZodSchemaConverter (Story 1.2) ([4a4b60c](https://github.com/escouade/spine/commit/4a4b60c))
+- **openapi:** pure builder — operations, parameters, metadata (Story 1.3) ([031087b](https://github.com/escouade/spine/commit/031087b))
+- **openapi:** component registry + $ref strategy (Story 1.4) ([8684551](https://github.com/escouade/spine/commit/8684551))
+- **scheduler,http-gateway:** SSE fan-out + CLS-scoped scheduling batteries ([46e5ede](https://github.com/escouade/spine/commit/46e5ede))
+
+### 🩹 Fixes
+
+- **mikro-orm:** rollback-on-error, module isolation, retry guard, log levels ([#11](https://github.com/escouade/spine/issues/11))
+- **mikro-orm:** BMAD review — lazy-flush UoW + logger/onStop/retry/repo hardening ([#11](https://github.com/escouade/spine/issues/11))
+- **mikro-orm:** actionable CLS-scope diagnostic + document limitations ([f729b3a](https://github.com/escouade/spine/commit/f729b3a))
+- **mikro-orm:** address multi-connection code-review findings (PR #20 follow-up) ([#20](https://github.com/escouade/spine/issues/20))
+- **openapi:** resolve cyclic $ref and lock $defs names (review PR #25) ([#25](https://github.com/escouade/spine/issues/25))
+- **release:** register openapi + scheduler in root workspaces ([f0b96fa](https://github.com/escouade/spine/commit/f0b96fa))
+- **scheduler,http-gateway:** address code-review findings (13 patches) ([c2a4e31](https://github.com/escouade/spine/commit/c2a4e31))
+
+### ❤️ Thank You
+
+- Claude Fable 5
+- Claude Opus 4.8
+- Claude Opus 4.8 (1M context)
+- Fabien Metais @metaisfabien
+
 ## 0.1.1 (2026-07-04)
 
 ### 🩹 Fixes
