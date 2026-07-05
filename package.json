@@ -13,6 +13,8 @@
     "packages/electron",
     "packages/electron-ipc-gateway",
     "packages/http-gateway",
+    "packages/openapi",
+    "packages/scheduler",
     "apps/docs-site",
     "examples/cls-request-context",
     "examples/http-routes",
