@@ -90,6 +90,8 @@ const Category: z.ZodType<CategoryNode> = z.object({
   children: z.array(z.lazy(() => Category)),
 });
 
+const Report = z.object({ id: z.string(), total: z.number() });
+
 @Controller({})
 class CatalogController {
   // Body schema carries `.meta({ id })` → registered under that id.
@@ -122,6 +124,41 @@ class CatalogController {
   }));
 }
 
+@Controller({})
+class ReportsController {
+  // Success envelope w/ data (io output) + static headers + media-type examples + a mapped 404 error
+  // + an extra 202 success status (its own envelope).
+  find = get(
+    "/reports/:id",
+    {
+      params: z.object({ id: z.string() }),
+      response: Report,
+      headers: { "X-Total-Count": "0" },
+      examples: {
+        sample: { value: { ok: true, data: { id: "1", total: 3 } } },
+      },
+      responses: {
+        404: { code: "REPORT_NOT_FOUND", description: "No such report" },
+        202: {
+          schema: z.object({ jobId: z.string() }),
+          description: "Accepted",
+        },
+      },
+    },
+    () => ({ ok: true })
+  );
+
+  // A second error-bearing route: proves the shared `ErrorResponse` component dedups to ONE entry.
+  archive = post(
+    "/reports/:id/archive",
+    {
+      params: z.object({ id: z.string() }),
+      responses: { 404: { code: "REPORT_NOT_FOUND" } },
+    },
+    () => ({ ok: true })
+  );
+}
+
 const contextFactory = {
   create: (honoCtx: HttpRaw): HttpBaseContext => ({ honoCtx }),
 };
@@ -142,5 +179,6 @@ export function fixtureRoutes(): readonly HttpRoute[] {
   gateway.register(getRoutes(new HealthController(), noGuards) as HttpRoute[]);
   gateway.register(getRoutes(new HiddenController(), noGuards) as HttpRoute[]);
   gateway.register(getRoutes(new CatalogController(), noGuards) as HttpRoute[]);
+  gateway.register(getRoutes(new ReportsController(), noGuards) as HttpRoute[]);
   return gateway.routes;
 }

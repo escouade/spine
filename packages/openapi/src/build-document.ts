@@ -1,12 +1,14 @@
 import type {
   JsonSchemaObject,
   JsonValue,
+  ParseableSchema,
   SchemaConverter,
 } from "@spinejs/gateway-core";
 import type {
   HttpMethod,
   HttpRoute,
   HttpRouteMeta,
+  RouteResponseDoc,
 } from "@spinejs/http-gateway";
 import { ComponentRegistry } from "./component-registry";
 import { ZodSchemaConverter } from "./zod-schema-converter";
@@ -35,8 +37,8 @@ const VERB_ORDER: readonly HttpMethod[] = [
  * Pure and deterministic (AD-5/AD-6): no I/O, no listener; same routes + config → identical output
  * (paths sorted lexically, operations in `VERB_ORDER`, components in sorted key order). Schemas are
  * converted through the injected {@link SchemaConverter} port (defaults to the zod adapter); reused and
- * body schemas are registered as `components/schemas` and referenced with `$ref` (AD-8). Response
- * bodies are a minimal placeholder here; the `{ ok, data }` envelope + multi-status map are Story 1.5.
+ * body schemas are registered as `components/schemas` and referenced with `$ref` (AD-8). Responses are
+ * envelope-wrapped `{ ok, data }` / `{ ok, code }` components with a multi-status map (AD-7).
  * SSE routes are skipped (Story 1.6) and guard-derived security is Story 1.7.
  */
 export function buildOpenApiDocument(
@@ -125,28 +127,186 @@ function buildOperation(
   if (parameters.length > 0) op.parameters = parameters;
 
   if (inputs.body) {
-    const base = `${pascalCase(operationId)}_Body`;
-    const { root, authoredId } = relocateDefs(
+    const ref = registerSchemaComponent(
       converter.toJsonSchema(inputs.body, { io: "input" }),
       registry,
-      base
+      `${pascalCase(operationId)}_Body`
     );
-    const ref = registry.register(root, { authoredId, derivedBase: base });
-    // A recursive body carries a `$ref: "#"` self-reference; now that the component name is known,
-    // rewrite it to this component so it points at itself instead of dangling at the document root.
-    registry.overwrite(ref, finalizeComponent(root, new Map(), ref));
     op.requestBody = {
       required: true,
       content: { "application/json": { schema: { $ref: ref } } },
     };
   }
 
-  // Minimal placeholder — the envelope-wrapped body + multi-status map are Story 1.5.
-  op.responses = {
-    [String(meta.successStatus ?? 200)]: { description: "OK" },
-  };
+  op.responses = buildResponses(meta, converter, registry, operationId);
 
   return op;
+}
+
+/**
+ * Relocate a converted fragment's `$defs`, register the cleaned root as a component, and resolve a
+ * recursive `$ref: "#"` to that component. Shared by the request body and every response body.
+ */
+function registerSchemaComponent(
+  converted: JsonSchemaObject,
+  registry: ComponentRegistry,
+  base: string
+): string {
+  const { root, authoredId } = relocateDefs(converted, registry, base);
+  const ref = registry.register(root, { authoredId, derivedBase: base });
+  // A recursive schema carries a `$ref: "#"` self-reference; now that the component name is known,
+  // rewrite it to this component so it points at itself instead of dangling at the document root.
+  registry.overwrite(ref, finalizeComponent(root, new Map(), ref));
+  return ref;
+}
+
+/**
+ * Build the `responses` object (AD-7). The success status carries a synthesized envelope component
+ * `{ ok: true, data: $ref }` (data-less `{ ok: true }` when the route has no `response` schema); each
+ * `responses`-map entry adds an envelope-wrapped success (its `schema`) or the shared `{ ok: false,
+ * code }` error component. Static `headers` declare success-response headers, author `examples` sit on
+ * the success media type. Statuses emit in ascending numeric order (AD-6); the success entry wins its
+ * own status if a `responses` key collides with `successStatus`.
+ */
+function buildResponses(
+  meta: HttpRouteMeta,
+  converter: SchemaConverter,
+  registry: ComponentRegistry,
+  operationId: string
+): JsonValue {
+  const successStatus = meta.successStatus ?? 200;
+  const byStatus = new Map<number, JsonValue>();
+  byStatus.set(
+    successStatus,
+    buildSuccessResponse(meta, converter, registry, operationId)
+  );
+
+  const extra = meta.responses ?? {};
+  for (const key of Object.keys(extra)) {
+    const status = Number(key);
+    if (byStatus.has(status)) continue; // the success entry wins its own status
+    byStatus.set(
+      status,
+      buildExtraResponse(
+        status,
+        extra[status],
+        converter,
+        registry,
+        operationId
+      )
+    );
+  }
+
+  const responses: { [status: string]: JsonValue } = {};
+  for (const status of [...byStatus.keys()].sort((a, b) => a - b)) {
+    responses[String(status)] = byStatus.get(status) as JsonValue;
+  }
+  return responses;
+}
+
+/** The success response: envelope `$ref` at `successStatus`, plus declared `headers` and `examples`. */
+function buildSuccessResponse(
+  meta: HttpRouteMeta,
+  converter: SchemaConverter,
+  registry: ComponentRegistry,
+  operationId: string
+): JsonValue {
+  const pascal = pascalCase(operationId);
+  const envelopeRef = registerSuccessEnvelope(
+    meta.response,
+    converter,
+    registry,
+    `${pascal}_Response`,
+    `${pascal}_ResponseEnvelope`
+  );
+  const media: { [key: string]: JsonValue } = { schema: { $ref: envelopeRef } };
+  // Author-supplied OpenAPI Example objects — opaque JSON, surfaced verbatim at the media-type level.
+  if (meta.examples !== undefined) media.examples = meta.examples as JsonValue;
+
+  const response: { [key: string]: JsonValue } = { description: "OK" };
+  if (meta.headers !== undefined)
+    response.headers = buildResponseHeaders(meta.headers);
+  response.content = { "application/json": media };
+  return response;
+}
+
+/** An extra documented status: envelope-wrapped success (has `schema`), shared error (has `code`), or bare. */
+function buildExtraResponse(
+  status: number,
+  doc: RouteResponseDoc,
+  converter: SchemaConverter,
+  registry: ComponentRegistry,
+  operationId: string
+): JsonValue {
+  const pascal = pascalCase(operationId);
+  if (doc.schema !== undefined) {
+    const envelopeRef = registerSuccessEnvelope(
+      doc.schema,
+      converter,
+      registry,
+      `${pascal}_Response${status}`,
+      `${pascal}_ResponseEnvelope${status}`
+    );
+    return {
+      description: doc.description ?? "OK",
+      content: { "application/json": { schema: { $ref: envelopeRef } } },
+    };
+  }
+  if (doc.code !== undefined) {
+    const errorRef = registry.register(errorEnvelope(), {
+      derivedBase: "ErrorResponse",
+    });
+    return {
+      // The concrete code stays documentation (the shared component keeps a generic `code: string`).
+      description: doc.description ?? `Error (${doc.code})`,
+      content: { "application/json": { schema: { $ref: errorRef } } },
+    };
+  }
+  return { description: doc.description ?? "" };
+}
+
+/**
+ * Register a `{ ok: true, data: $ref }` success envelope (data-less `{ ok: true }` when no schema) and
+ * return its ref. The inner schema is converted `io: "output"` (FR-C6) and registered as its own component.
+ */
+function registerSuccessEnvelope(
+  responseSchema: ParseableSchema<unknown> | undefined,
+  converter: SchemaConverter,
+  registry: ComponentRegistry,
+  innerBase: string,
+  envelopeBase: string
+): string {
+  const properties: { [key: string]: JsonValue } = { ok: { const: true } };
+  const required: JsonValue[] = ["ok"];
+  if (responseSchema !== undefined) {
+    const innerRef = registerSchemaComponent(
+      converter.toJsonSchema(responseSchema, { io: "output" }),
+      registry,
+      innerBase
+    );
+    properties.data = { $ref: innerRef };
+    required.push("data");
+  }
+  const envelope: JsonSchemaObject = { type: "object", properties, required };
+  return registry.register(envelope, { derivedBase: envelopeBase });
+}
+
+/** The shared error envelope `{ ok: false, code: string }` — content-identical, so it dedups to one component. */
+function errorEnvelope(): JsonSchemaObject {
+  return {
+    type: "object",
+    properties: { ok: { const: false }, code: { type: "string" } },
+    required: ["ok", "code"],
+  };
+}
+
+/** Declared response headers: each static value captured as a `const` schema (sorted for AD-6). */
+function buildResponseHeaders(headers: Record<string, string>): JsonValue {
+  const out: { [name: string]: JsonValue } = {};
+  for (const name of Object.keys(headers).sort()) {
+    out[name] = { schema: { const: headers[name] } };
+  }
+  return out;
 }
 
 /**

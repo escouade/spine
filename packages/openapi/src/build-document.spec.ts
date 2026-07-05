@@ -144,12 +144,157 @@ describe("buildOpenApiDocument", () => {
     expect(p["/users/{id}"].delete.operationId).toBe("deleteUsersById");
   });
 
-  it("emits a minimal responses placeholder (default 200, successStatus honoured)", () => {
+  it("wraps a data-less success in a named envelope at successStatus (AD-7)", () => {
     const p = paths(build());
-    expect(p["/users"].get.responses).toEqual({ "200": { description: "OK" } });
-    expect(p["/users"].post.responses).toEqual({
-      "201": { description: "OK" },
+    // No `response` schema → `{ ok: true }` envelope component, referenced (never inlined).
+    expect(p["/users"].get.responses).toEqual({
+      "200": {
+        description: "OK",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/GetUsers_ResponseEnvelope" },
+          },
+        },
+      },
     });
+    // successStatus is honoured (201 for the creation).
+    expect(p["/users"].post.responses).toEqual({
+      "201": {
+        description: "OK",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/PostUsers_ResponseEnvelope" },
+          },
+        },
+      },
+    });
+    expect(components(build()).GetUsers_ResponseEnvelope).toEqual({
+      type: "object",
+      properties: { ok: { const: true } },
+      required: ["ok"],
+    });
+  });
+
+  it("wraps a `response` schema as `{ ok: true, data: $ref }` over a named inner component (AC #1)", () => {
+    const doc = build();
+    const ok = paths(doc)["/reports/{id}"].get.responses as Record<string, Op>;
+    expect(ok["200"]).toMatchObject({
+      content: {
+        "application/json": {
+          schema: {
+            $ref: "#/components/schemas/GetReportsById_ResponseEnvelope",
+          },
+        },
+      },
+    });
+    // Envelope references the inner data component; the raw schema is never inlined unwrapped.
+    expect(components(doc).GetReportsById_ResponseEnvelope).toEqual({
+      type: "object",
+      properties: {
+        ok: { const: true },
+        data: { $ref: "#/components/schemas/GetReportsById_Response" },
+      },
+      required: ["ok", "data"],
+    });
+    expect(components(doc).GetReportsById_Response).toEqual({
+      type: "object",
+      properties: { id: { type: "string" }, total: { type: "number" } },
+      required: ["id", "total"],
+      additionalProperties: false,
+    });
+  });
+
+  it("declares static headers on the success response only, as `const` schemas (AC #2)", () => {
+    const doc = build();
+    const ok = paths(doc)["/reports/{id}"].get.responses as Record<string, Op>;
+    expect(ok["200"].headers).toEqual({
+      "X-Total-Count": { schema: { const: "0" } },
+    });
+    // Not on the error / extra responses.
+    expect(ok["404"].headers).toBeUndefined();
+    expect(ok["202"].headers).toBeUndefined();
+  });
+
+  it("surfaces author examples at the response media type, never at operation level (AC #4)", () => {
+    const doc = build();
+    const op = paths(doc)["/reports/{id}"].get;
+    expect(op.examples).toBeUndefined();
+    const ok = op.responses as Record<string, Op>;
+    const media = (ok["200"].content as Record<string, Op>)["application/json"];
+    expect(media.examples).toEqual({
+      sample: { value: { ok: true, data: { id: "1", total: 3 } } },
+    });
+  });
+
+  it("emits one shared, deduplicated `ErrorResponse` component for mapped errors (AD-7/AD-8)", () => {
+    const doc = build();
+    const c = components(doc);
+    expect(c.ErrorResponse).toEqual({
+      type: "object",
+      properties: { ok: { const: false }, code: { type: "string" } },
+      required: ["ok", "code"],
+    });
+    // Deduped: never suffixed, even though two routes declare a 404 error.
+    expect(c.ErrorResponse_2).toBeUndefined();
+    const a = (paths(doc)["/reports/{id}"].get.responses as Record<string, Op>)[
+      "404"
+    ];
+    const b = (
+      paths(doc)["/reports/{id}/archive"].post.responses as Record<string, Op>
+    )["404"];
+    const refOf = (r: Op) =>
+      ((r.content as Record<string, Op>)["application/json"].schema as Op).$ref;
+    expect(refOf(a)).toBe("#/components/schemas/ErrorResponse");
+    expect(refOf(b)).toBe("#/components/schemas/ErrorResponse");
+  });
+
+  it("documents each extra status in ascending order, wrapping success bodies and errors (AC #3)", () => {
+    const doc = build();
+    const responses = paths(doc)["/reports/{id}"].get.responses as Record<
+      string,
+      Op
+    >;
+    // successStatus + responses-map keys, ascending numeric.
+    expect(Object.keys(responses)).toEqual(["200", "202", "404"]);
+    // 202 extra success → its own envelope over an inner component.
+    expect(responses["202"]).toEqual({
+      description: "Accepted",
+      content: {
+        "application/json": {
+          schema: {
+            $ref: "#/components/schemas/GetReportsById_ResponseEnvelope202",
+          },
+        },
+      },
+    });
+    // 404 error → shared component; explicit doc description wins.
+    expect(responses["404"].description).toBe("No such report");
+  });
+
+  it("falls back to `Error (<code>)` when a mapped error has no description", () => {
+    const responses = paths(build())["/reports/{id}/archive"].post
+      .responses as Record<string, Op>;
+    expect(responses["404"].description).toBe("Error (REPORT_NOT_FOUND)");
+  });
+
+  it("converts response schemas with io:output (FR-C6)", () => {
+    @Controller({})
+    class OutController {
+      read = get(
+        "/out",
+        {
+          response: z.object({
+            n: z.string(),
+            ready: z.boolean().default(false),
+          }),
+        },
+        () => ({ ok: true })
+      );
+    }
+    const doc = docFromController(new OutController());
+    const inner = components(doc).GetOut_Response as { required?: string[] };
+    // On the output side a `.default()` field is always present → required (input would omit it).
+    expect(inner.required).toContain("ready");
   });
 
   it("never emits an operation-level examples field (not valid in 3.1)", () => {
