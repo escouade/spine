@@ -14,6 +14,8 @@ export type {
   RouteFn,
   HttpRouteHelpers,
   HttpRouteMeta,
+  RouteDocMeta,
+  RouteResponseDoc,
   RouteHelper,
   RouteOptions,
   InputOf,
