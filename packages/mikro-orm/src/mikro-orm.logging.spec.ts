@@ -63,7 +63,7 @@ describe("MikroORM logging bridge (Story 1.5)", () => {
 
     const em = orm.em.fork();
     await em.begin();
-    em.persist(em.create(Note, { text: "hi" } as Note));
+    em.persist(em.create(Note, { text: "hi" }));
     await em.commit();
     await orm.close(true);
 
@@ -92,7 +92,7 @@ describe("MikroORM logging bridge (Story 1.5)", () => {
       (async () => {
         const em = orm.em.fork();
         await em.begin();
-        em.persist(em.create(Note, { text: "hi" } as Note));
+        em.persist(em.create(Note, { text: "hi" }));
         await em.commit();
         await orm.close(true);
       })()

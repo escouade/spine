@@ -37,7 +37,7 @@ class UserService {
   constructor(private readonly users: UserRepository) {}
   add(name: string, email: string): void {
     const em = this.users.getEntityManager();
-    em.persist(em.create(User, { name, email } as User));
+    em.persist(em.create(User, { name, email }));
   }
   findByEmail(email: string): Promise<User | null> {
     return this.users.findByEmail(email);

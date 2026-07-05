@@ -92,7 +92,7 @@ describe("MikroOrmInterceptor through the real DispatchPipeline (BUG 1 regressio
 
   it("ROLLS BACK when the handler throws a business error (pipeline returns {ok:false}, does not reject)", async () => {
     const res = await runDispatch(async (em) => {
-      em.persist(em.create(Account, { balance: 100 } as Account));
+      em.persist(em.create(Account, { balance: 100 }));
       throw new Error("business rule violated"); // pipeline maps this to { ok: false }
     });
 
@@ -109,7 +109,7 @@ describe("MikroOrmInterceptor through the real DispatchPipeline (BUG 1 regressio
 
   it("COMMITS on the success path", async () => {
     const res = await runDispatch(async (em) => {
-      em.persist(em.create(Account, { balance: 42 } as Account));
+      em.persist(em.create(Account, { balance: 42 }));
     });
     expect(res.ok).toBe(true);
 
