@@ -28,6 +28,15 @@ export type {
   RetryPolicy,
 } from "./mikro-orm.options";
 
+// Pure-function migration handlers — the leaf core shared by the CLI and the programmatic runner
+// (AD-5). They take a raw MikroORM `IMigrator` and import only from `@mikro-orm/*` (AD-10).
+export { createMigration, up, down, list, pending } from "./migrations";
+export type {
+  CreateMigrationFlags,
+  CreateMigrationResult,
+  VersionFlags,
+} from "./migrations";
+
 // Re-export the MikroORM primitives a consumer needs (entity/repository/manager), so an app can define
 // entities and inject the manager depending on @spinejs/mikro-orm alone. Identity-preserving: these are
 // the same classes @mikro-orm/core exports, so the DI tokens match whichever import path is used.
