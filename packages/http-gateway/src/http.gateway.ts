@@ -69,9 +69,11 @@ export class HttpGateway<
   /**
    * Every route registered so far, across all feature modules. The source the OpenAPI battery
    * (`@spinejs/openapi`) reads to build the document — the transport never re-scans controllers.
+   * Returns a **snapshot copy**, so a caller can neither mutate the internal registry nor observe
+   * routes appended by a later `register()` through a previously read reference.
    */
   get routes(): readonly HttpRoute<Ctx>[] {
-    return this._routes;
+    return [...this._routes];
   }
 
   private bind(route: HttpRoute<Ctx>): void {

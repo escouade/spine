@@ -64,9 +64,12 @@ describe("route doc metadata carry (AD-13)", () => {
         "/things/:id",
         {
           summary: "Find a thing",
+          description: "Fetch one thing by id",
           tags: ["things"],
           operationId: "findThing",
           deprecated: true,
+          examples: { ok: { value: { id: "1" } } },
+          responses: { 404: { code: "NOT_FOUND" } },
           hidden: true,
         },
         () => ({ ok: true })
@@ -76,16 +79,23 @@ describe("route doc metadata carry (AD-13)", () => {
     const [route] = getRoutes(new DocController(), noGuards);
     const meta = route.meta as HttpRouteMeta;
     expect(meta.summary).toBe("Find a thing");
+    expect(meta.description).toBe("Fetch one thing by id");
     expect(meta.tags).toEqual(["things"]);
     expect(meta.operationId).toBe("findThing");
     expect(meta.deprecated).toBe(true);
+    expect(meta.examples).toEqual({ ok: { value: { id: "1" } } });
+    expect(meta.responses).toEqual({ 404: { code: "NOT_FOUND" } });
     expect(meta.hidden).toBe(true);
   });
 
-  it("leaves doc fields undefined when the author omits them (NFR-4)", () => {
+  it("omits doc fields from meta when the author provides none (NFR-4, clean meta)", () => {
     const [route] = getRoutes(new UsersController(), noGuards);
     const meta = route.meta as HttpRouteMeta;
+    // Only-provided fields are carried — no `undefined`-valued keys pollute meta (stable downstream).
     expect(meta.summary).toBeUndefined();
     expect(meta.hidden).toBeUndefined();
+    expect(Object.keys(meta)).not.toContain("summary");
+    expect(Object.keys(meta)).not.toContain("hidden");
+    expect(Object.keys(meta)).not.toContain("responses");
   });
 });
