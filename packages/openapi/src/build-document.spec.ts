@@ -61,6 +61,9 @@ function docFromController(controller: object) {
   return buildOpenApiDocument(gateway.routes, config);
 }
 
+// A named response schema (unique id — module-level so zod's global `.meta` registry sees it once).
+const NamedResponse = z.object({ v: z.string() }).meta({ id: "NamedResponse" });
+
 describe("buildOpenApiDocument", () => {
   it("emits a 3.1 document envelope with configured info", () => {
     const doc = build();
@@ -295,6 +298,28 @@ describe("buildOpenApiDocument", () => {
     const inner = components(doc).GetOut_Response as { required?: string[] };
     // On the output side a `.default()` field is always present → required (input would omit it).
     expect(inner.required).toContain("ready");
+  });
+
+  it("names a response's inner component from its `.meta({ id })` and the envelope refs it (AD-8)", () => {
+    @Controller({})
+    class NamedController {
+      read = get("/named", { response: NamedResponse }, () => ({ ok: true }));
+    }
+    const doc = docFromController(new NamedController());
+    // Inner data component keeps the authored id (like a body), not a derived `<opId>_Response`.
+    expect(components(doc).NamedResponse).toEqual({
+      type: "object",
+      properties: { v: { type: "string" } },
+      required: ["v"],
+      additionalProperties: false,
+    });
+    expect(components(doc).GetNamed_Response).toBeUndefined();
+    const envelope = components(doc).GetNamed_ResponseEnvelope as {
+      properties: { data: { $ref?: string } };
+    };
+    expect(envelope.properties.data.$ref).toBe(
+      "#/components/schemas/NamedResponse"
+    );
   });
 
   it("never emits an operation-level examples field (not valid in 3.1)", () => {
