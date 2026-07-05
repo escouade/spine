@@ -10,7 +10,7 @@ import { toProvider } from "@spinejs/gateway-core";
 import type {
   ContextFactory,
   ErrorMapper,
-  GatewayInterceptor,
+  ChainInterceptor,
   ProviderAdapter,
   Validator,
 } from "@spinejs/gateway-core";
@@ -28,7 +28,7 @@ const contextFactoryToken = new InjectionToken<
   ContextFactory<HttpRaw, HttpBaseContext>
 >("http-gateway.context-factory");
 const interceptorsToken = new InjectionToken<
-  GatewayInterceptor<HttpBaseContext, string, HttpRoute>[]
+  ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
 >("http-gateway.interceptors");
 const statusMapperToken = new InjectionToken<
   ((code: string) => number) | undefined
@@ -64,7 +64,7 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
         validator: Validator,
         errorMapper: ErrorMapper<string>,
         contextFactory: ContextFactory<HttpRaw, HttpBaseContext>,
-        interceptors: GatewayInterceptor<HttpBaseContext, string, HttpRoute>[],
+        interceptors: ChainInterceptor<HttpBaseContext, string, HttpRoute>[],
         statusMapper: ((code: string) => number) | undefined,
         sseHeartbeatMs: number | undefined
       ) =>
@@ -115,7 +115,7 @@ export class HttpGatewayModule implements OnStart, OnStop {
     errorMapper?: ProviderAdapter<ErrorMapper<string>>;
     validator?: ProviderAdapter<Validator>;
     interceptors?: ProviderAdapter<
-      GatewayInterceptor<HttpBaseContext, string, HttpRoute>[]
+      ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
     >;
     /** Maps an `ErrorMapper` code to an HTTP status. Defaults to the built-in BAD_REQUEST/UNAUTHORIZED/INTERNAL_ERROR mapping. */
     statusMapper?: ProviderAdapter<(code: string) => number>;

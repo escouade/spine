@@ -45,6 +45,17 @@ The interceptor's first argument is the dispatch **target**. It defaults to the 
 
 `next()` delegates to the next interceptor in the chain, or — if this is the last one — to the core pipeline (guards → validate → invoke). Always return the result of `next()` (or a replacement envelope) so the chain completes.
 
+## Transport-agnostic interceptors
+
+An interceptor that only touches `ctx`/`next` — never the route — is **transport-agnostic**: its type is the base `GatewayInterceptor<GatewayContext, …>` (e.g. `ClsInterceptor`, `MikroOrmInterceptor`). You add it to any transport's `interceptors` array **as-is, no cast**. Each transport narrows its slot to its own context + route, but the slot's element type is a `ChainInterceptor` — a union that admits either a transport-specific interceptor **or** a base transport-agnostic one:
+
+```typescript
+import type { ChainInterceptor } from "@spinejs/gateway-core";
+// exported for reference; you rarely name it — it is the type the transport slots already use.
+```
+
+This is why `configure({ interceptors: [new ClsInterceptor(cls), ormInterceptor] })` type-checks with no `as`, even though `ormInterceptor` is typed at the base `GatewayContext` and the slot is narrowed to the transport's route.
+
 ## Execution order
 
 Interceptors are chained in registration order. The first interceptor in the array is the outermost wrapper — it runs first on the way in and last on the way out:

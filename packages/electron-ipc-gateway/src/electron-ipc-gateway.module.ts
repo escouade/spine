@@ -10,7 +10,7 @@ import { toProvider } from "@spinejs/gateway-core";
 import type {
   ContextFactory,
   ErrorMapper,
-  GatewayInterceptor,
+  ChainInterceptor,
   ProviderAdapter,
   Validator,
 } from "@spinejs/gateway-core";
@@ -33,7 +33,7 @@ const contextFactoryToken = new InjectionToken<
   ContextFactory<ElectronIpcRaw, ElectronIpcBaseContext>
 >("electron-ipc-gateway.context-factory");
 const interceptorsToken = new InjectionToken<
-  GatewayInterceptor<ElectronIpcBaseContext, string, IpcRoute>[]
+  ChainInterceptor<ElectronIpcBaseContext, string, IpcRoute>[]
 >("electron-ipc-gateway.interceptors");
 
 /**
@@ -62,7 +62,7 @@ const interceptorsToken = new InjectionToken<
         errorMapper: ErrorMapper<string>,
         contextFactory: ContextFactory<ElectronIpcRaw, ElectronIpcBaseContext>,
         logger: Logger,
-        interceptors: GatewayInterceptor<
+        interceptors: ChainInterceptor<
           ElectronIpcBaseContext,
           string,
           IpcRoute
@@ -93,7 +93,7 @@ export class ElectronIpcGatewayModule {
     errorMapper?: ProviderAdapter<ErrorMapper<string>>;
     validator?: ProviderAdapter<Validator>;
     interceptors?: ProviderAdapter<
-      GatewayInterceptor<ElectronIpcBaseContext, string, IpcRoute>[]
+      ChainInterceptor<ElectronIpcBaseContext, string, IpcRoute>[]
     >;
   }): DynamicModule {
     return {

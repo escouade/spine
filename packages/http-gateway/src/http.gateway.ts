@@ -8,7 +8,7 @@ import {
   LoadedRoute,
   Validator,
   ErrorMapper,
-  GatewayInterceptor,
+  ChainInterceptor,
   ContextFactory,
   UnauthorizedError,
 } from "@spinejs/gateway-core";
@@ -41,7 +41,7 @@ export class HttpGateway<
     private readonly validator: Validator,
     private readonly errorMapper: ErrorMapper<Code>,
     private readonly contextFactory: ContextFactory<HttpRaw, Ctx>,
-    interceptors: GatewayInterceptor<Ctx, Code, HttpRoute<Ctx>>[] = [],
+    interceptors: ChainInterceptor<Ctx, Code, HttpRoute<Ctx>>[] = [],
     private readonly statusMapper: (
       code: Code
     ) => number = defaultStatusMapper as (code: Code) => number,

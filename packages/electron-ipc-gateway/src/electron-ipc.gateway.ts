@@ -4,7 +4,7 @@ import {
   ContextFactory,
   DispatchPipeline,
   ErrorMapper,
-  GatewayInterceptor,
+  ChainInterceptor,
   LoadedRoute,
   Validator,
 } from "@spinejs/gateway-core";
@@ -36,7 +36,7 @@ export class ElectronIpcGateway<
     errorMapper: ErrorMapper<Code>,
     private readonly contextFactory: ContextFactory<ElectronIpcRaw, Ctx>,
     private readonly logger: Logger,
-    interceptors: GatewayInterceptor<Ctx, Code, IpcRoute<Ctx>>[] = []
+    interceptors: ChainInterceptor<Ctx, Code, IpcRoute<Ctx>>[] = []
   ) {
     this.pipeline = new DispatchPipeline<Ctx, Code, IpcRoute<Ctx>>(
       validator,
