@@ -16,7 +16,7 @@ export class UserService {
    */
   add(name: string, email: string): void {
     const em = this.users.getEntityManager();
-    em.persist(em.create(User, { name, email } as User));
+    em.persist(em.create(User, { name, email }));
   }
 
   /**
