@@ -409,6 +409,82 @@ empilé lève un diagnostic de câblage — il refuse de retomber sur un manager
 fuite inter-requêtes). Empilez l'interceptor de chaque connexion que vous utilisez.
 :::
 
+## Migrations
+
+Déclarez un bloc `migrations` sur la connexion que vous configurez déjà, et `@spinejs/mikro-orm` y
+branche le [Migrator](https://mikro-orm.io/docs/migrations) de MikroORM — l'application et la CLI lisent
+le **même** `AppModule`, il n'y a donc aucun `mikro-orm.config.ts` qui pourrait se désynchroniser.
+
+```ts
+// modules/app.module.ts
+MikroOrmModule.configure({
+  driver: PostgreSqlDriver,
+  dbName: "app",
+  entities: [User],
+  migrations: {
+    path: "./migrations", // où vivent les fichiers de migration et le snapshot
+  },
+});
+```
+
+Les migrations demandent une dépendance peer supplémentaire — installée seulement si vous les utilisez :
+
+```bash
+yarn add -D @mikro-orm/migrations   # même majeure que @mikro-orm/core (v6)
+```
+
+Une connexion **sans** bloc `migrations` reste intacte : pas de Migrator, pas de nouvelle table, et le
+peer n'est jamais requis (le configurer alors qu'il manque échoue au boot avec un message actionnable
+nommant le paquet). Configurer les migrations est la première étape — les commandes pour créer,
+appliquer et annuler les migrations sont couvertes par la CLI de migration.
+
+### Défauts
+
+Spine applique des défauts entity-first pour que le cas courant ne demande aucun réglage. Toute clé que
+vous posez l'emporte.
+
+| Clé             | Défaut | Pourquoi                                                                                    |
+| --------------- | ------ | ------------------------------------------------------------------------------------------- |
+| `emit`          | `"ts"` | Classes de migration TypeScript.                                                            |
+| `snapshot`      | `true` | Enregistre le dernier schéma connu pour le prochain diff ; commitez-le au VCS.              |
+| `transactional` | `true` | Chaque migration tourne dans une transaction.                                               |
+| `allOrNothing`  | `true` | Un batch en échec est annulé en entier — valide sur sqlite + postgres (DDL transactionnel). |
+
+:::warning Clés étrangères SQLite
+Sur SQLite, une migration qui reconstruit une table peut nécessiter `disableForeignKeys`, qui ne se
+combine **pas** avec une transaction englobante. Spine n'active jamais `disableForeignKeys` à votre
+place, donc les défauts n'émettent jamais silencieusement une migration cassée sous cette interaction —
+laissez-la désactivée sauf si une migration précise en a besoin.
+:::
+
+:::note Commitez le snapshot
+Commitez vos fichiers de migration **et** le snapshot de schéma ensemble. Un snapshot perdu corrompt le
+prochain diff.
+:::
+
+### Isolation par connexion
+
+Chaque connexion garde son propre historique de migration. Une connexion **nommée** met par défaut son
+dossier à `./migrations/<name>` (la connexion par défaut garde `./migrations`), pour que deux connexions
+ne partagent jamais un dossier par accident :
+
+```ts
+// les migrations analytics vivent dans ./migrations/analytics
+MikroOrmModule.configure({
+  name: "analytics",
+  driver,
+  dbName,
+  entities,
+  migrations: {},
+});
+```
+
+Si deux connexions devaient tout de même entrer en collision — même `path`, ou même base physique
+(`host` + `dbName`) avec la même table de suivi — la configuration **échoue en fail-closed au boot** avec
+une erreur nommant les deux connexions. Quand deux connexions partagent une base physique mais gardent
+des tables de suivi **distinctes**, Spine avertit à la place : l'isolation est par config, pas une preuve
+de bases séparées.
+
 ## Le câblage à la main (la factory) {#by-hand}
 
 `configure()` n'a rien de magique — c'est une petite composition DI inspectable : un provider de valeur
@@ -552,6 +628,7 @@ propre cycle de vie (voir _Connexions multiples_). `options` est le `Options` de
 | `retry`      | `Partial<RetryPolicy>` | `DEFAULT_RETRY` | Politique de retry au démarrage (ci-dessous).                                                |
 | `name`       | `string`               | _(par défaut)_  | Enregistre une connexion nommée, injectée via `mikroOrmRef(name)` / `entityManagerRef`.      |
 | `multiWrite` | `boolean`              | `false`         | Autorise l'écriture de cette connexion aux côtés d'une autre dans une requête (best-effort). |
+| `migrations` | `MigrationsOptions`    | _(off)_         | Active les migrations de schéma sur cette connexion (ci-dessous). Omis = aucune.             |
 | _(reste)_    | `Options` MikroORM     | —               | Driver, `dbName`, `entities`, pool, logs.                                                    |
 
 `RetryPolicy` et ses défauts (`DEFAULT_RETRY`) :
@@ -563,6 +640,22 @@ propre cycle de vie (voir _Connexions multiples_). `options` est le `Options` de
 | `backoff`  | `number` | `2`    | Multiplicateur appliqué au délai après chaque échec (`1` = constant). |
 
 Tout champ omis de `retry` retombe sur sa valeur `DEFAULT_RETRY`.
+
+`MigrationsOptions` (une vue curatée de `Options["migrations"]` de MikroORM) — chaque clé est optionnelle
+et Spine applique les défauts de _Migrations_ ci-dessus :
+
+| Champ                | Type           | Défaut                               | Signification                                                       |
+| -------------------- | -------------- | ------------------------------------ | ------------------------------------------------------------------- |
+| `path`               | `string`       | `./migrations` (`/<name>` si nommée) | Dossier des fichiers de migration et du snapshot.                   |
+| `tableName`          | `string`       | `mikro_orm_migrations`               | Table de suivi des migrations exécutées.                            |
+| `emit`               | `"ts" \| "js"` | `"ts"`                               | Format des fichiers de migration.                                   |
+| `snapshot`           | `boolean`      | `true`                               | Garde un snapshot de schéma commité pour le diff.                   |
+| `transactional`      | `boolean`      | `true`                               | Exécute chaque migration dans une transaction.                      |
+| `allOrNothing`       | `boolean`      | `true`                               | Annule le batch entier en cas d'échec.                              |
+| `disableForeignKeys` | `boolean`      | _(off)_                              | Échappatoire reconstruction de table SQLite — voir l'avertissement. |
+
+`@mikro-orm/migrations` (`^6`, même majeure que `@mikro-orm/core`) est une **dépendance peer
+optionnelle** : requise uniquement quand une connexion déclare `migrations`.
 
 ### `MikroOrmModule.register([...])`
 
