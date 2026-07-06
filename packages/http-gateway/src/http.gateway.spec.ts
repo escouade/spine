@@ -169,6 +169,26 @@ describe("response-headers bag (AD-8, Story 1.2)", () => {
     expect(res.headers.get("X-Static")).toBe("s");
   });
 
+  it("bag headers override the gateway default case-INSENSITIVELY (no combined `Content-Type`)", async () => {
+    const lowerCaseWriter: ChainInterceptor<
+      HttpBaseContext,
+      string,
+      HttpRoute
+    > = {
+      intercept: (_t, ctx, _i, next) => {
+        // Lowercase key: a plain-record Object.assign would keep BOTH `Content-Type` (default) and
+        // `content-type` (bag), and the Response would combine them ("application/json, text/plain").
+        responseHeadersOf(ctx)["content-type"] = "text/plain";
+        return next();
+      },
+    };
+    const gw = gatewayWith([lowerCaseWriter]);
+    gw.register(getRoutes(new MixedController(), noGuards) as HttpRoute[]);
+
+    const res = await gw.app.request("/ok");
+    expect(res.headers.get("content-type")).toBe("text/plain"); // one value, the bag won
+  });
+
   it("leaves untouched requests byte-identical (no bag, no new headers)", async () => {
     const gw = gatewayWith([]);
     gw.register(getRoutes(new MixedController(), noGuards) as HttpRoute[]);

@@ -98,12 +98,16 @@ export class HttpGateway<
         : this.statusMapper(envelope.code);
       // Merge order (AD-8): gateway defaults < per-request headers bag < route `meta.headers`.
       // The bag applies on success AND error paths; static route headers stay success-only.
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
+      // A `Headers` object merges case-INSENSITIVELY: a bag `content-type` overrides the default
+      // `Content-Type` (a plain-record Object.assign would keep both → a combined header value).
+      const headers = new Headers({ "Content-Type": "application/json" });
       const bag = readResponseHeadersBag(ctx);
-      if (bag) Object.assign(headers, bag);
-      if (envelope.ok && meta?.headers) Object.assign(headers, meta.headers);
+      if (bag)
+        for (const [name, value] of Object.entries(bag))
+          headers.set(name, value);
+      if (envelope.ok && meta?.headers)
+        for (const [name, value] of Object.entries(meta.headers))
+          headers.set(name, value);
       return new Response(JSON.stringify(envelope), { status, headers });
     });
   }

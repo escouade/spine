@@ -139,6 +139,17 @@ describe("HTTP route options through real verb helpers (Story 1.8)", () => {
     expect((await send(pipeline, relaxed)).ok).toBe(true); // default limit 3 untouched
   });
 
+  it('rejects a non-plain-object `throttle` value at build (true/"global"/array run with defaults otherwise)', () => {
+    // `throttle: true` typechecks under plain JS (no augmentation) and would spread to nothing —
+    // the helper must reject it rather than silently enforce defaults.
+    expect(() =>
+      post("/x", { throttle: true as unknown as false }, () => 0)
+    ).toThrow(/`throttle` must be a throttle options object or `false`/);
+    expect(() =>
+      post("/x", { throttle: [] as unknown as false }, () => 0)
+    ).toThrow(/got an array/);
+  });
+
   it("scopes a route-less default per route target via the stamped routeId", async () => {
     @Controller({})
     class TwoRoutesController {
