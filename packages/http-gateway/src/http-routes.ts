@@ -116,6 +116,11 @@ function composeInput<P, Q, B>(
   };
 }
 
+/** True for a non-null, non-array object literal (the only shape a battery `meta` namespace accepts). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Per-transport extras carried on the marker's `meta` (never interpreted by the core): the split
  * input schemas + the `response` schema (for OpenAPI) and the optional per-route success status.
@@ -222,11 +227,23 @@ function buildMarker<
   // path template). The transport never interprets the fields (opaque copy); `throttle: false` is
   // encoded as `disabled: true`. The option itself is typed only by @spinejs/throttle's
   // `declare module` augmentation — without the battery, `throttle:` is an unknown property.
+  // Guard the plain-JS misuse the augmentation can't (`throttle: true` / `"global"` would spread to
+  // nothing and silently run with defaults): only an options object or `false` is a valid value.
   const throttleOption = (options as { throttle?: unknown }).throttle;
+  if (
+    throttleOption !== undefined &&
+    throttleOption !== false &&
+    !isPlainObject(throttleOption)
+  ) {
+    throw new Error(
+      `Route "${method} ${path}": \`throttle\` must be a throttle options object or \`false\` ` +
+        `(got ${
+          Array.isArray(throttleOption) ? "an array" : typeof throttleOption
+        }).`
+    );
+  }
   (meta as { throttle?: unknown }).throttle = {
-    ...(throttleOption === false
-      ? { disabled: true }
-      : (throttleOption as object | undefined)),
+    ...(throttleOption === false ? { disabled: true } : throttleOption),
     routeId: `${method} ${path}`,
   };
   return makeRouteMarker<Ctx, HttpAddress, InputOf<S>>({
