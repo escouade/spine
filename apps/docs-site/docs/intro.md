@@ -66,14 +66,15 @@ The [**Getting Started**](getting-started) guide takes you from an empty folder 
 
 ## Package overview
 
-| Package                         | Role                                                                                                                                     |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `@spinejs/core`                 | Module system, DI container, `App` orchestrator, lifecycle hooks, built-in logger                                                        |
-| `@spinejs/gateway-core`         | Building blocks to build a transport gateway: `DispatchPipeline`, ports, `@Controller`, field routes, `@UseGuards`, `Envelope`           |
-| `@spinejs/electron-ipc-gateway` | Electron IPC transport — composes the pipeline onto `ipcMain.handle`                                                                     |
-| `@spinejs/http-gateway`         | HTTP transport on Hono — composes the pipeline onto HTTP routes                                                                          |
-| `@spinejs/electron`             | `ElectronModule` (window + lifecycle) and `WindowService`                                                                                |
-| `@spinejs/config`               | Typed, async-capable config loading                                                                                                      |
-| `@spinejs/winston-logger`       | Drop-in `Logger` implementation backed by Winston                                                                                        |
-| `@spinejs/mikro-orm`            | MikroORM integration: request-scoped unit-of-work (persist without `.save()`), repositories injected by class token, `spine-migrate` CLI |
-| `@spinejs/scheduler`            | Periodic background tasks (interval); each tick runs in its own CLS scope — a synthetic request with a per-tick unit-of-work             |
+| Package                         | Role                                                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@spinejs/core`                 | Module system, DI container, `App` orchestrator, lifecycle hooks, built-in logger                                                                       |
+| `@spinejs/gateway-core`         | Building blocks to build a transport gateway: `DispatchPipeline`, ports, `@Controller`, field routes, `@UseGuards`, `Envelope`                          |
+| `@spinejs/electron-ipc-gateway` | Electron IPC transport — composes the pipeline onto `ipcMain.handle`                                                                                    |
+| `@spinejs/http-gateway`         | HTTP transport on Hono — composes the pipeline onto HTTP routes                                                                                         |
+| `@spinejs/electron`             | `ElectronModule` (window + lifecycle) and `WindowService`                                                                                               |
+| `@spinejs/config`               | Typed, async-capable config loading                                                                                                                     |
+| `@spinejs/winston-logger`       | Drop-in `Logger` implementation backed by Winston                                                                                                       |
+| `@spinejs/mikro-orm`            | MikroORM integration: request-scoped unit-of-work (persist without `.save()`), repositories injected by class token, `spine-migrate` CLI                |
+| `@spinejs/scheduler`            | Periodic background tasks (interval); each tick runs in its own CLS scope — a synthetic request with a per-tick unit-of-work                            |
+| `@spinejs/throttle`             | Rate limiting: exact sliding-window policies enforced as a gateway interceptor; transport-blind core with HTTP (`RateLimit-*`) and electron-ipc presets |
