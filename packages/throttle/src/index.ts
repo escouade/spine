@@ -8,6 +8,7 @@ export type {
   KeySelector,
   LimitReachedEvent,
   StorePolicy,
+  ThrottleErrorEvent,
   ThrottleOutcome,
   ThrottlePolicy,
   ThrottleStore,

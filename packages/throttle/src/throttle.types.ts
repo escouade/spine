@@ -139,5 +139,22 @@ export interface LimitReachedEvent {
   rawKey?: string;
 }
 
+/**
+ * Payload of `onError` (FR-14): a policy that failed to evaluate — a throwing key selector, a
+ * non-string selector return, or a store call that rejected/threw. Fired on **every** such failure
+ * (fail-closed *and* fail-open), so a broken selector or store outage is never invisible telemetry
+ * (a fail-closed policy would otherwise 429 100% of traffic with no signal). Never carries key
+ * material (there may be none).
+ */
+export interface ThrottleErrorEvent {
+  policyName: string;
+  /** The stamped route id (or `'gateway'`) the failing policy applied to. */
+  routeId: string;
+  /** Where the failure happened: resolving the key (`selector`) or the atomic store call (`store`). */
+  phase: "selector" | "store";
+  /** The thrown/rejected value. */
+  error: unknown;
+}
+
 /** The stable rejection code an exhausted policy surfaces through the envelope path (FR-11). */
 export const TOO_MANY_REQUESTS = "TOO_MANY_REQUESTS" as const;

@@ -35,8 +35,9 @@ export function validatePolicy(
   const fail = (rule: string): never => {
     throw new ThrottleConfigError(name, rule);
   };
-  if (!Number.isFinite(policy.limit) || policy.limit <= 0) {
-    fail(`\`limit\` must be a positive number (got ${policy.limit})`);
+  // A limit is a slot count — a fractional `limit` (5.5 accepts 5 then rejects) is a config bug.
+  if (!Number.isInteger(policy.limit) || policy.limit <= 0) {
+    fail(`\`limit\` must be a positive integer (got ${policy.limit})`);
   }
   if (policy.limit > MAX_POLICY_LIMIT) {
     fail(
@@ -45,6 +46,14 @@ export function validatePolicy(
   }
   if (!Number.isFinite(policy.windowMs) || policy.windowMs <= 0) {
     fail(`\`windowMs\` must be a positive number (got ${policy.windowMs})`);
+  }
+  // A NaN/0/negative `maxKeys` would disable the LRU bound (Math.max(1, NaN) = NaN → no eviction),
+  // reopening the per-policy memory-DoS the bound exists to prevent (AD-5). Must be a positive integer.
+  if (
+    policy.maxKeys !== undefined &&
+    (!Number.isInteger(policy.maxKeys) || policy.maxKeys <= 0)
+  ) {
+    fail(`\`maxKeys\` must be a positive integer (got ${policy.maxKeys})`);
   }
   if (policy.scope === "gateway" && context.routeInline) {
     fail(

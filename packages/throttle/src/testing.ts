@@ -41,11 +41,50 @@ const policy = (overrides: Partial<StorePolicy> = {}): StorePolicy => ({
 });
 
 function expectEqual(actual: unknown, expected: unknown, what: string): void {
-  const a = JSON.stringify(actual);
-  const b = JSON.stringify(expected);
-  if (a !== b) {
-    throw new Error(`Store contract violated — ${what}: got ${a}, want ${b}`);
+  // Compare semantically, NOT via JSON.stringify: a conforming store may return the same
+  // `ConsumeResult` fields in a different key order (`{ resetMs, totalHits, accepted }`), which a
+  // string compare would flag as a false contract violation.
+  if (!deepEqual(actual, expected)) {
+    throw new Error(
+      `Store contract violated — ${what}: got ${JSON.stringify(
+        actual
+      )}, want ${JSON.stringify(expected)}`
+    );
   }
+}
+
+/** Structural equality: arrays compared element-wise (order matters), objects key-set-wise (order does not). */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((item, index) => deepEqual(item, b[index]))
+    );
+  }
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null
+  ) {
+    return false;
+  }
+  const aKeys = Object.keys(a as Record<string, unknown>);
+  const bKeys = Object.keys(b as Record<string, unknown>);
+  return (
+    aKeys.length === bKeys.length &&
+    aKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(b, key) &&
+        deepEqual(
+          (a as Record<string, unknown>)[key],
+          (b as Record<string, unknown>)[key]
+        )
+    )
+  );
 }
 
 /** Runs a case body against a fresh store + clock, always disposing the store. */

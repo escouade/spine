@@ -53,12 +53,51 @@ class RefundingStore implements ThrottleStore {
   }
 }
 
+/** A correct sliding-log store that returns its `ConsumeResult` fields in a DIFFERENT key order. */
+class ReorderingStore implements ThrottleStore {
+  private readonly logs = new Map<string, number[]>();
+  constructor(private readonly clock: Clock) {}
+
+  async consume(key: string, policy: StorePolicy): Promise<ConsumeResult> {
+    const now = this.clock.now();
+    let log = this.logs.get(key);
+    if (!log) {
+      log = [];
+      this.logs.set(key, log);
+    }
+    const cutoff = now - policy.windowMs;
+    while (log.length > 0 && log[0] <= cutoff) log.shift();
+    if (log.length >= policy.limit) {
+      // Correct values — only the property order differs from the reference store.
+      return {
+        resetMs: log[0] + policy.windowMs - now,
+        totalHits: policy.limit,
+        accepted: false,
+      };
+    }
+    log.push(now);
+    return {
+      resetMs: log[0] + policy.windowMs - now,
+      totalHits: log.length,
+      accepted: true,
+    };
+  }
+}
+
 describe("contract kit discrimination (Story 1.6)", () => {
   const caseByName = (fragment: string) => {
     const found = throttleStoreContract.find((c) => c.name.includes(fragment));
     if (!found) throw new Error(`No contract case matching "${fragment}"`);
     return found;
   };
+
+  it("passes a conforming store whose ConsumeResult keys are in a different order (semantic compare)", async () => {
+    // A JSON.stringify compare would flag this as a false violation; the semantic compare must not.
+    const rejects = caseByName("rejects at limit");
+    await expect(
+      rejects.run((clock) => new ReorderingStore(clock))
+    ).resolves.toBeUndefined();
+  });
 
   it("fails the no-refund case against a store that refunds on reject", async () => {
     const noRefund = caseByName("never refunds");

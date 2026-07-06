@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryThrottleStore, monotonicClock } from "./memory-store";
-import type { ConsumeResult, StorePolicy } from "./throttle.types";
+import type { Clock, ConsumeResult, StorePolicy } from "./throttle.types";
 
 /** Deterministic test clock (NFR-5): time only moves when the test says so. */
 class FakeClock {
@@ -226,5 +226,43 @@ describe("per-policy bounds, LRU and introspection (AD-5, Story 1.5)", () => {
     await store.consume("a", policy());
     await store.consume("b", policy());
     expect(store.stats().p).toEqual({ size: 1, evictions: 1 });
+  });
+
+  it("rejects a non-positive/non-integer maxKeysPerPolicy at construction (would disable the bound)", () => {
+    expect(() => new InMemoryThrottleStore({ maxKeysPerPolicy: 0 })).toThrow(
+      /positive integer/
+    );
+    expect(
+      () => new InMemoryThrottleStore({ maxKeysPerPolicy: Number.NaN })
+    ).toThrow(/positive integer/);
+  });
+});
+
+describe("store robustness (review PR #36)", () => {
+  it("throws on consume after dispose — no silent state resurrection without a sweep timer", async () => {
+    const store = new InMemoryThrottleStore({
+      clock: new FakeClock(),
+      sweepIntervalMs: 0,
+    });
+    await store.consume("k", policy());
+    store.dispose();
+    await expect(store.consume("k", policy())).rejects.toThrow(/after dispose/);
+  });
+
+  it("clamps a non-monotonic custom clock so the ascending hit log never rewinds", async () => {
+    let t = 1000;
+    const clock: Clock = { now: () => t };
+    const store = new InMemoryThrottleStore({ clock, sweepIntervalMs: 0 });
+    stores.push(store);
+
+    expect(await store.consume("k", policy())).toEqual({
+      accepted: true,
+      totalHits: 1,
+      resetMs: 1000,
+    });
+    t = 500; // clock rewinds — the store must clamp `now` to the last observed 1000
+    const second = await store.consume("k", policy());
+    expect(second.totalHits).toBe(2); // appended in order, not before the first hit
+    expect(second.resetMs).toBe(1000); // oldest(1000) + windowMs(1000) − now(clamped 1000)
   });
 });
