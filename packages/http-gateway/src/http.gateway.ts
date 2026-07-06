@@ -12,6 +12,7 @@ import {
   ContextFactory,
   UnauthorizedError,
 } from "@spinejs/gateway-core";
+import type { Envelope, GatewayInterceptor } from "@spinejs/gateway-core";
 import {
   readResponseHeadersBag,
   type HttpAddress,
@@ -43,6 +44,16 @@ export class HttpGateway<
   private readonly pipeline: DispatchPipeline<Ctx, Code, HttpRoute<Ctx>>;
   /** Every route registered so far, accumulated across `register()` calls (one call per feature module). */
   private readonly _routes: HttpRoute<Ctx>[] = [];
+  /**
+   * Interceptors run in `dispatchSse` at **connection time**, before guards (AD-6). The variance
+   * assertion mirrors `DispatchPipeline`'s: a transport-agnostic base `GatewayInterceptor` (the
+   * `ChainInterceptor` union's second member) only touches `ctx`/`next`, so it is runtime-safe here.
+   */
+  private readonly connectInterceptors: GatewayInterceptor<
+    Ctx,
+    Code,
+    HttpRoute<Ctx>
+  >[];
 
   constructor(
     private readonly validator: Validator,
@@ -53,13 +64,27 @@ export class HttpGateway<
       code: Code
     ) => number = defaultStatusMapper as (code: Code) => number,
     /** Interval (ms) between SSE keep-alive comments on a stream; `0` disables. */
-    private readonly sseHeartbeatMs = 15_000
+    private readonly sseHeartbeatMs = 15_000,
+    /**
+     * SSE connection-attempt enforcement (AD-6): interceptors run in `dispatchSse` **before** guards.
+     * An allowed connect resolves `next()` to a synthetic accept envelope before the stream opens; a
+     * deny short-circuits with a failure envelope (mapped through `statusMapper` + the header bag).
+     * The app passes the SAME throttle interceptor instance here and in `interceptors` — one engine,
+     * one store. The main `interceptors` array keeps its ADR-0017 no-SSE behavior (it never runs on
+     * a stream; `dispatchSse` bypasses the buffered pipeline).
+     */
+    connectInterceptors: ChainInterceptor<Ctx, Code, HttpRoute<Ctx>>[] = []
   ) {
     this.pipeline = new DispatchPipeline<Ctx, Code, HttpRoute<Ctx>>(
       this.validator,
       this.errorMapper,
       interceptors
     );
+    this.connectInterceptors = connectInterceptors as GatewayInterceptor<
+      Ctx,
+      Code,
+      HttpRoute<Ctx>
+    >[];
   }
 
   /**
@@ -113,23 +138,38 @@ export class HttpGateway<
   }
 
   /**
-   * SSE dispatch: runs guards + input validation up front (a failure returns a normal JSON error
-   * envelope, no stream), then streams the handler's `AsyncIterable<SseEvent>` to the client until it
-   * disconnects. Bypasses the buffered-`Envelope` pipeline — a stream is many values, not one — while
-   * reusing the same guards, validator and error mapping. No interceptor chain and no per-connection
-   * CLS scope: the handler gets `ctx` directly, and a long-lived stream must not hold scoped resources
-   * (e.g. a DB transaction) open for its whole lifetime.
+   * SSE dispatch: enforces the connection attempt via `connectInterceptors` (before guards, AD-6),
+   * then runs guards + input validation up front (a failure returns a normal JSON error envelope, no
+   * stream), then streams the handler's `AsyncIterable<SseEvent>` until the client disconnects.
+   * Bypasses the buffered-`Envelope` pipeline — a stream is many values, not one — while reusing the
+   * same guards, validator and error mapping. The main `interceptors` chain never runs here (ADR
+   * 0017); only `connectInterceptors` do, and only at connect. No per-connection CLS scope: a
+   * long-lived stream must not hold scoped resources (e.g. a DB transaction) open for its lifetime.
    */
   private async dispatchSse(
     route: HttpRoute<Ctx>,
     c: HonoCtx
   ): Promise<Response> {
     const ctx = this.contextFactory.create(c);
+    // Connection-attempt enforcement (AD-6): run before guards. An allowed connect resolves to a
+    // synthetic accept envelope before the stream opens; a deny is written as a JSON failure Response
+    // with the header bag merged (draft-6 `RateLimit-*` + `Retry-After` a throttle interceptor wrote).
+    // Stream events are never counted — the connect chain runs exactly once, here.
+    const rawInput = await extractInput(c, "GET");
+    if (this.connectInterceptors.length) {
+      const connect = await this.runConnect(route, ctx, rawInput);
+      if (!connect.ok) {
+        return this.sseJsonResponse(
+          ctx,
+          connect,
+          this.statusMapper(connect.code)
+        );
+      }
+    }
     try {
       for (const guard of route.guards) {
         if (!(await guard.canActivate(ctx))) throw new UnauthorizedError();
       }
-      const rawInput = await extractInput(c, "GET");
       const input = route.input
         ? this.validator.validate(route.input, rawInput)
         : rawInput;
@@ -138,6 +178,10 @@ export class HttpGateway<
         throw new Error("SSE handler must return an AsyncIterable<SseEvent>");
       }
       const meta = route.meta as HttpRouteMeta | undefined;
+      // Stream-open (AD-8): merge the header bag first (a producer's `RateLimit-*` from the accepted
+      // connect), then static route headers on top — the same defaults < bag < route order as bind().
+      const bag = readResponseHeadersBag(ctx);
+      if (bag) for (const [key, val] of Object.entries(bag)) c.header(key, val);
       if (meta?.headers) {
         for (const [key, val] of Object.entries(meta.headers))
           c.header(key, val);
@@ -147,11 +191,52 @@ export class HttpGateway<
       );
     } catch (err) {
       const code = this.errorMapper.toCode(err);
-      return new Response(JSON.stringify({ ok: false, code }), {
-        status: this.statusMapper(code),
-        headers: { "Content-Type": "application/json" },
-      });
+      return this.sseJsonResponse(
+        ctx,
+        { ok: false, code },
+        this.statusMapper(code)
+      );
     }
+  }
+
+  /**
+   * Runs the `connectInterceptors` chain around a synthetic accept (`{ ok: true, data: undefined }`)
+   * — the SSE connect analogue of `DispatchPipeline.dispatch`. An interceptor short-circuits with a
+   * failure envelope (a throttle deny); a throwing interceptor is mapped to a failure code, so the
+   * connect path always yields an envelope, never a raw 500.
+   */
+  private async runConnect(
+    route: HttpRoute<Ctx>,
+    ctx: Ctx,
+    rawInput: unknown
+  ): Promise<Envelope<unknown, Code>> {
+    const accept = async (): Promise<Envelope<unknown, Code>> => ({
+      ok: true,
+      data: undefined,
+    });
+    const chain = this.connectInterceptors.reduceRight(
+      (next, interceptor) => () =>
+        interceptor.intercept(route, ctx, rawInput, next),
+      accept
+    );
+    try {
+      return await chain();
+    } catch (err) {
+      return { ok: false, code: this.errorMapper.toCode(err) };
+    }
+  }
+
+  /** Builds a JSON envelope Response on an SSE non-stream path (deny / error), merging the header bag (AD-8). */
+  private sseJsonResponse(
+    ctx: Ctx,
+    envelope: Envelope<unknown, Code>,
+    status: number
+  ): Response {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    const bag = readResponseHeadersBag(ctx);
+    if (bag)
+      for (const [name, value] of Object.entries(bag)) headers.set(name, value);
+    return new Response(JSON.stringify(envelope), { status, headers });
   }
 
   listen(port: number) {
