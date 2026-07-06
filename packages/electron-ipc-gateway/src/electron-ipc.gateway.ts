@@ -30,6 +30,8 @@ export class ElectronIpcGateway<
   Code extends string = string
 > {
   private readonly pipeline: DispatchPipeline<Ctx, Code, IpcRoute<Ctx>>;
+  /** Every channel registered so far, accumulated across `register()` calls (one per feature module). */
+  private readonly _routes: IpcRoute<Ctx>[] = [];
 
   constructor(
     validator: Validator,
@@ -45,9 +47,23 @@ export class ElectronIpcGateway<
     );
   }
 
-  /** Mounts pre-resolved IPC routes on `ipcMain`. Called by the feature module. */
+  /**
+   * Mounts pre-resolved IPC routes on `ipcMain`. Called **once per feature module**, so it
+   * **accumulates** (appends) — a later module's channels never replace an earlier one's.
+   */
   register(routes: IpcRoute<Ctx>[]): void {
+    this._routes.push(...routes);
     for (const route of routes) this.bind(route);
+  }
+
+  /**
+   * Every channel registered so far, across all feature modules — the readonly route snapshot
+   * (symmetric with `HttpGateway.routes`). A battery reads it at boot to validate route-inline specs
+   * (`@spinejs/throttle`'s route-snapshot walk, NFR-3). Returns a **snapshot copy**, so a caller can
+   * neither mutate the internal registry nor observe channels appended by a later `register()`.
+   */
+  get routes(): readonly IpcRoute<Ctx>[] {
+    return [...this._routes];
   }
 
   private bind(route: IpcRoute<Ctx>): void {

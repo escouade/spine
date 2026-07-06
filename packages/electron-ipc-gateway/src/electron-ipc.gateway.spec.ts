@@ -93,3 +93,53 @@ describe("ElectronIpcGateway failure envelope meta (FailureMeta seam)", () => {
     });
   });
 });
+
+describe("ElectronIpcGateway readonly route snapshot (Story 2.2, symmetric with HttpGateway.routes)", () => {
+  const newGateway = (): ElectronIpcGateway =>
+    new ElectronIpcGateway(
+      new ZodValidator(),
+      new DefaultErrorMapper(),
+      contextFactory,
+      silentLogger
+    );
+
+  it("accumulates channels across register() calls and reflects their markers/meta", () => {
+    @Controller({})
+    class AController {
+      a = handle("cmd:a", {}, () => 0);
+    }
+    @Controller({})
+    class BController {
+      b = handle("cmd:b", {}, () => 0);
+    }
+
+    const gw = newGateway();
+    gw.register(getRoutes(new AController(), noGuards) as IpcRoute[]);
+    gw.register(getRoutes(new BController(), noGuards) as IpcRoute[]);
+
+    expect(gw.routes.map((r) => r.address)).toEqual(["cmd:a", "cmd:b"]);
+    // The snapshot exposes each channel's opaque `meta` (what the throttle boot walk reads).
+    expect(gw.routes.every((r) => r.meta !== undefined)).toBe(true);
+  });
+
+  it("returns a snapshot copy — a caller can neither mutate the registry nor see later registers", () => {
+    @Controller({})
+    class AController {
+      a = handle("cmd:a", {}, () => 0);
+    }
+    @Controller({})
+    class LaterController {
+      later = handle("cmd:later", {}, () => 0);
+    }
+
+    const gw = newGateway();
+    gw.register(getRoutes(new AController(), noGuards) as IpcRoute[]);
+    const snapshot = gw.routes;
+    (snapshot as IpcRoute[]).push({} as IpcRoute); // mutating the copy is inert
+    gw.register(getRoutes(new LaterController(), noGuards) as IpcRoute[]);
+
+    // The internal registry is untouched by the push, and the previously-read reference did not grow.
+    expect(gw.routes.map((r) => r.address)).toEqual(["cmd:a", "cmd:later"]);
+    expect(snapshot.map((r) => r.address)).toEqual(["cmd:a", undefined]);
+  });
+});
