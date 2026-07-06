@@ -90,7 +90,25 @@ describe("renderOpenApiDocument — YAML (AD-6 ordering)", () => {
     );
     // The envelope/error components are shared object references; `aliasDuplicateObjects: false` must keep
     // them expanded rather than emitting `&anchor` / `*alias` (which would be valid YAML but tool-fragile).
-    expect(yaml).not.toMatch(/(^|\s)[&*][A-Za-z0-9_]/m);
+    // Match only at a node value/sequence position (`: &`, `- &`, `: *`, `- *`) — a bare `/\s[&*]\w/` would
+    // false-positive on a legitimate scalar like `description: Sales &marketing`, which YAML emits unquoted.
+    expect(yaml).not.toMatch(/[:-] [&*][A-Za-z0-9_]/m);
+  });
+
+  it("keeps a genuinely shared object reference expanded (the `aliasDuplicateObjects: false` guard)", () => {
+    // Direct control, independent of the builder: two document nodes point at the SAME object instance, so
+    // YAML's default (`aliasDuplicateObjects: true`) WOULD anchor the first and alias the second (`*a1`).
+    // This proves the render option is active regardless of whether the builder happens to share identity.
+    const shared = { description: "shared", type: "object" };
+    const doc = {
+      openapi: "3.1.0",
+      info: { title: "t", version: "1" },
+      paths: { "/a": shared, "/b": shared },
+    } as unknown as Parameters<typeof renderOpenApiDocument>[0];
+    const yaml = renderOpenApiDocument(doc, "yaml");
+    expect(yaml).not.toMatch(/[:-] [&*][A-Za-z0-9_]/m);
+    // Both nodes must carry the full body, not an alias back-reference.
+    expect(yaml.match(/description: shared/g)).toHaveLength(2);
   });
 
   it("ends with a single trailing newline", () => {
@@ -100,6 +118,17 @@ describe("renderOpenApiDocument — YAML (AD-6 ordering)", () => {
     );
     expect(yaml.endsWith("\n")).toBe(true);
     expect(yaml.endsWith("\n\n")).toBe(false);
+  });
+
+  it("throws on an unsupported render format (fail fast, no silent fallback)", () => {
+    const doc = buildOpenApiDocument(fixtureRoutes(), config);
+    // A JS caller (or a future unhandled `EmitFormat` member) must not silently get YAML back.
+    expect(() =>
+      renderOpenApiDocument(
+        doc,
+        "xml" as Parameters<typeof renderOpenApiDocument>[1]
+      )
+    ).toThrow(/Unsupported OpenAPI render format/);
   });
 });
 
@@ -114,7 +143,7 @@ describe("emitOpenApiDocument — file I/O (FR-E1)", () => {
     const out = join(await tmpDir(), "nested", "deep", "openapi.json");
     const written = await emitOpenApiDocument(doc, { out });
     expect(written).toBe(out);
-    await expect(stat(written)).resolves.toBeDefined();
+    expect((await stat(written)).isFile()).toBe(true);
     expect(await readFile(written, "utf8")).toBe(
       renderOpenApiDocument(doc, "json")
     );

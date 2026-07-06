@@ -31,18 +31,27 @@ export function renderOpenApiDocument(
   doc: OpenApiDocument,
   format: EmitFormat
 ): string {
-  if (format === "json") {
-    return `${JSON.stringify(doc, null, 2)}\n`;
+  switch (format) {
+    case "json":
+      return `${JSON.stringify(doc, null, 2)}\n`;
+    case "yaml":
+      // `aliasDuplicateObjects: false` — the builder's component registry reuses fragment objects; the
+      // default (`true`) would emit `&anchor`/`*alias` for them, producing noisy, tool-fragile output.
+      // `lineWidth: 0` disables fold-wrapping so a node stays on one line and diffs stay local (the point
+      // of file emission). `.trimEnd() + "\n"` pins exactly one trailing newline — symmetric with the JSON
+      // branch, so the byte golden (AD-6) never depends on `yaml`'s trailing-whitespace default at a bump.
+      return `${stringify(doc, {
+        aliasDuplicateObjects: false,
+        lineWidth: 0,
+      }).trimEnd()}\n`;
+    default:
+      // Public API — fail fast on an unsupported format rather than silently defaulting to one branch.
+      throw new Error(
+        `Unsupported OpenAPI render format: ${JSON.stringify(
+          format
+        )}. Expected "json" or "yaml".`
+      );
   }
-  // `aliasDuplicateObjects: false` — the builder's component registry reuses fragment objects; the default
-  // (`true`) would emit `&anchor`/`*alias` for them, producing noisy, tool-fragile output. `lineWidth: 0`
-  // disables fold-wrapping so a node stays on one line and diffs stay local (the point of file emission).
-  // `.trimEnd() + "\n"` pins exactly one trailing newline — symmetric with the JSON branch, so the byte
-  // golden (AD-6) never depends on `yaml`'s default trailing-whitespace behavior across a version bump.
-  return `${stringify(doc, {
-    aliasDuplicateObjects: false,
-    lineWidth: 0,
-  }).trimEnd()}\n`;
 }
 
 /** Map a file extension to its {@link EmitFormat}, or `undefined` when it is not a recognized spec extension. */
