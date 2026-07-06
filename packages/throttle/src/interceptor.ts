@@ -39,8 +39,8 @@ export class ThrottleInterceptor implements GatewayInterceptor {
   constructor(
     /** This instance's resolved configuration (readonly — instances never share or merge config). */
     readonly config: ResolvedThrottleConfig,
-    /** The store backing this instance's policies, when one is wired. */
-    readonly store: ThrottleStore | undefined
+    /** The store backing this instance's policies. */
+    readonly store: ThrottleStore
   ) {}
 
   // Policy evaluation (engine) lands with Story 1.7 — until then the interceptor is a pass-through

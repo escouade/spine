@@ -2,6 +2,7 @@ import { InjectionToken, Module } from "@spinejs/core";
 import type { DynamicModule } from "@spinejs/core";
 import type { GatewayContext } from "@spinejs/gateway-core";
 import { validatePolicies } from "./policy-validation";
+import { InMemoryThrottleStore } from "./memory-store";
 import { ThrottleInterceptor } from "./interceptor";
 import type { ResolvedThrottleConfig } from "./interceptor";
 import type {
@@ -35,9 +36,7 @@ export interface ThrottleModuleOptions {
 
 // Internal per-instance tokens: each `configure()` returns a `fresh` module node providing its own
 // values for them, so nothing leaks between named instances.
-const storeToken = new InjectionToken<ThrottleStore | undefined>(
-  "throttle.store"
-);
+const storeToken = new InjectionToken<ThrottleStore>("throttle.store");
 
 // Public interceptor token registry, memoized per instance name — `throttleInterceptorRef("api")`
 // always returns the same token object, so the providing node and the injecting app agree on it
@@ -101,12 +100,18 @@ export class ThrottleModule {
       // Isolated instance per configure() call: identity = this object, never the class (AD-7).
       fresh: true,
       providers: [
-        // The built-in memory store becomes the default here with Story 1.4.
-        { provide: storeToken, value: options.store },
+        // Default store: the built-in in-memory sliding log, owned by this instance (one store
+        // per named instance — quotas never shared across gateways, AD-7).
+        {
+          provide: storeToken,
+          factory: () =>
+            options.store ??
+            new InMemoryThrottleStore({ clock: options.clock }),
+        },
         {
           provide: throttleInterceptorRef(name),
           inject: [storeToken] as const,
-          factory: (store: ThrottleStore | undefined) =>
+          factory: (store: ThrottleStore) =>
             new ThrottleInterceptor(config, store),
         },
       ],
