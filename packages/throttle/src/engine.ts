@@ -1,11 +1,12 @@
 import type { Envelope, GatewayContext } from "@spinejs/gateway-core";
 import { buildStorageKey, hashKey } from "./key-pipeline";
-import { validatePolicy } from "./policy-validation";
+import { validatePolicy, ThrottleConfigError } from "./policy-validation";
 import {
   TOO_MANY_REQUESTS,
   throttleOutcome,
   type KeySelector,
   type LimitReachedEvent,
+  type ThrottleErrorEvent,
   type ThrottleOutcome,
   type ThrottlePolicy,
   type ThrottleStore,
@@ -21,10 +22,16 @@ export interface ResolvedThrottleConfig {
   keySources: Record<string, KeySelector>;
   /** Observability hook fired on every rejection (FR-14). */
   onLimitReached?: (event: LimitReachedEvent) => void;
+  /** Observability hook fired on every policy-evaluation failure — fail-closed telemetry (FR-14). */
+  onError?: (event: ThrottleErrorEvent) => void;
   /** Opt-in: include the raw (pre-hash) key on `onLimitReached` events. */
   emitRawKey: boolean;
-  /** Outcome observer (AD-8) — the `./http` preset plugs its outcome→headers translator here. */
-  onOutcome?: (ctx: GatewayContext, outcome: ThrottleOutcome) => void;
+  /**
+   * Outcome observer (AD-8): invoked once per dispatch after the {@link throttleOutcome} ctx slot is
+   * written. Reads the slot via `readThrottleOutcome(ctx)` — the `./http` preset plugs its
+   * outcome→headers translator here.
+   */
+  onOutcome?: (ctx: GatewayContext) => void;
 }
 
 /** Per-route tuning of a named gateway default (FR-3). Route-inline policies are never overridable. */
@@ -54,12 +61,18 @@ export interface ThrottleRouteMeta extends ThrottleRouteOption {
   disabled?: boolean;
 }
 
-/** Fallback scope for targets whose route helper stamped no `meta.throttle` (e.g. hand-built targets). */
+/**
+ * Fallback route id for targets whose route helper stamped no `meta.throttle.routeId` (a hand-built
+ * or as-yet-unstamped target, e.g. IPC channels before Story 2.1). A **route-scoped** policy hitting
+ * this is a fail-loud error (never a silent shared `"route"` bucket); a gateway-scoped policy is fine.
+ */
 const UNSTAMPED_ROUTE_ID = "route";
 
 /** A route's parsed + validated throttle spec, cached per `meta.throttle` object. */
 interface ParsedRouteSpec {
   routeId: string;
+  /** `true` when no `routeId` was stamped — route-scoped policies must fail loud (AD-3/AD-7). */
+  unstamped: boolean;
   disabled: boolean;
   skip: ReadonlySet<string>;
   override: Record<string, ThrottlePolicyOverride>;
@@ -69,6 +82,7 @@ interface ParsedRouteSpec {
 
 const NO_SPEC: ParsedRouteSpec = {
   routeId: UNSTAMPED_ROUTE_ID,
+  unstamped: true,
   disabled: false,
   skip: new Set(),
   override: {},
@@ -84,6 +98,14 @@ interface PolicyEvaluation {
   accepted: boolean;
   keyHash?: string;
   rawKey?: string;
+}
+
+/** An effective (post-`skip`/`override`) policy plus the store-space id its counters live under. */
+interface ApplicablePolicy {
+  /** Store-space id (`StorePolicy.id`): the policy name, or `name@routeId` for an overridden default. */
+  id: string;
+  policyName: string;
+  policy: ThrottlePolicy;
 }
 
 /**
@@ -119,7 +141,7 @@ export class ThrottleEngine {
     for (const applicable of this.applicablePolicies(spec)) {
       const evaluation = await this.evaluatePolicy(
         applicable,
-        spec.routeId,
+        spec,
         ctx,
         rawInput
       );
@@ -136,25 +158,38 @@ export class ThrottleEngine {
       limit: reported.limit,
       remaining: reported.remaining,
       resetMs: reported.resetMs,
-      ...(rejected.length ? { retryAfterMs: reported.resetMs } : {}),
+      // Retry-After must clear EVERY rejecting policy: the LATEST reset over all of them, not the
+      // most-restrictive one's — retrying at the soonest reset would still hit a slower policy.
+      ...(rejected.length
+        ? { retryAfterMs: Math.max(...rejected.map((e) => e.resetMs)) }
+        : {}),
     };
     // Written exactly once per dispatch (accept or reject) — AD-8.
     (ctx as { [throttleOutcome]?: ThrottleOutcome })[throttleOutcome] = outcome;
-    this.config.onOutcome?.(ctx, outcome);
+    // Observers are never load-bearing: a throwing outcome/limit hook must not 500 the dispatch.
+    try {
+      this.config.onOutcome?.(ctx);
+    } catch {
+      /* observer error swallowed — presentation/metrics must not break enforcement */
+    }
 
     if (rejected.length === 0) return null;
 
     for (const evaluation of rejected) {
       // Fail-closed synthetic rejections carry no key (the selector/store failed) — the event is
-      // about a *reached limit*, so only real exhaustions fire it.
+      // about a *reached limit*, so only real exhaustions fire it (fail-closed → `onError` instead).
       if (evaluation.keyHash === undefined) continue;
-      this.config.onLimitReached?.({
-        policyName: evaluation.policyName,
-        routeId: spec.routeId,
-        keyHash: evaluation.keyHash,
-        retryAfterMs: evaluation.resetMs,
-        ...(this.config.emitRawKey ? { rawKey: evaluation.rawKey } : {}),
-      });
+      try {
+        this.config.onLimitReached?.({
+          policyName: evaluation.policyName,
+          routeId: spec.routeId,
+          keyHash: evaluation.keyHash,
+          retryAfterMs: evaluation.resetMs,
+          ...(this.config.emitRawKey ? { rawKey: evaluation.rawKey } : {}),
+        });
+      } catch {
+        /* observer error swallowed */
+      }
     }
     return {
       ok: false,
@@ -163,19 +198,19 @@ export class ThrottleEngine {
     };
   }
 
-  /** Gateway defaults (minus `skip`, `override` merged) + route-inline policies with their ids. */
+  /** Gateway defaults (minus `skip`, `override` merged) + route-inline policies with their store ids. */
   private *applicablePolicies(
     spec: ParsedRouteSpec
-  ): Iterable<{ id: string; policyName: string; policy: ThrottlePolicy }> {
+  ): Iterable<ApplicablePolicy> {
     for (const [name, policy] of Object.entries(this.config.policies)) {
       if (spec.skip.has(name)) continue;
       const override = spec.override[name];
-      // An overridden default is enforced with the merged values, route-scoped: its window/limit
-      // differ from the shared default, so it cannot share the gateway-wide bucket coherently.
-      const effective = override
-        ? { ...policy, ...override, scope: "route" as const }
-        : policy;
-      yield { id: name, policyName: name, policy: effective };
+      // An overridden default is enforced route-scoped with the merged values, in its OWN store
+      // space (`name@routeId`): a per-route `maxKeys` override must not resize — and evict counters
+      // in — the shared default's space used by other routes / the gateway scope (AD-5 isolation).
+      const effective = override ? { ...policy, ...override } : policy;
+      const id = override ? `${name}@${spec.routeId}` : name;
+      yield { id, policyName: name, policy: effective };
     }
     for (const inline of spec.inline) {
       yield { id: inline.id, policyName: inline.id, policy: inline.policy };
@@ -183,17 +218,31 @@ export class ThrottleEngine {
   }
 
   /**
-   * Runs one policy for this dispatch: key selection (raw pre-validation input), `null`-skip,
-   * hash + scope, then the store's atomic `consume`. A throwing selector or store call follows the
-   * failure policy: fail-closed (a synthetic no-key rejection) unless the policy sets `failOpen`.
+   * Runs one policy for this dispatch: key selection (raw pre-validation input), `null`/`undefined`
+   * skip, hash + scope, then the store's atomic `consume`. A throwing selector, a non-string
+   * selector return, or a throwing store call fires `onError` (fail-closed telemetry) and follows
+   * the failure policy: fail-closed (a synthetic no-key rejection) unless the policy sets `failOpen`.
    */
   private async evaluatePolicy(
-    applicable: { id: string; policyName: string; policy: ThrottlePolicy },
-    routeId: string,
+    applicable: ApplicablePolicy,
+    spec: ParsedRouteSpec,
     ctx: GatewayContext,
     rawInput: unknown
   ): Promise<PolicyEvaluation | null> {
     const { id, policyName, policy } = applicable;
+    const routeId = spec.routeId;
+
+    // A route-scoped policy on an unstamped target would silently share one `"route"` bucket across
+    // every such target — fail loud instead (AD-3/AD-7). Gateway-scoped policies are unaffected.
+    if (policy.scope !== "gateway" && spec.unstamped) {
+      throw new ThrottleConfigError(
+        policyName,
+        `a route-scoped policy was applied to a target with no stamped \`routeId\` ` +
+          `(a hand-built or as-yet-unstamped target). Stamp \`meta.throttle.routeId\`, or ` +
+          `declare the policy \`scope: 'gateway'\``
+      );
+    }
+
     const failClosed = (): PolicyEvaluation => ({
       policyName,
       limit: policy.limit,
@@ -208,11 +257,24 @@ export class ThrottleEngine {
         typeof policy.keyBy === "function"
           ? policy.keyBy
           : this.config.keySources[policy.keyBy];
-      rawKey = selector(ctx, rawInput);
-    } catch {
+      const selected = selector(ctx, rawInput) as unknown;
+      // `null`/`undefined` → the selector opted this policy out for this request (FR-6). A non-string
+      // is a selector bug: fail loud (routed through the failure policy) rather than hashing garbage.
+      if (selected === null || selected === undefined) {
+        rawKey = null;
+      } else if (typeof selected === "string") {
+        rawKey = selected;
+      } else {
+        throw new TypeError(
+          `throttle key selector for policy "${policyName}" returned a ${typeof selected}; ` +
+            "a selector must return a string key or null."
+        );
+      }
+    } catch (error) {
+      this.reportError(policyName, routeId, "selector", error);
       return policy.failOpen ? null : failClosed();
     }
-    if (rawKey === null) return null; // selector opted this policy out for this request (FR-6)
+    if (rawKey === null) return null;
 
     const scope = policy.scope === "gateway" ? "gateway" : routeId;
     try {
@@ -231,16 +293,33 @@ export class ThrottleEngine {
         keyHash: hashKey(rawKey),
         rawKey,
       };
-    } catch {
+    } catch (error) {
+      this.reportError(policyName, scope, "store", error);
       return policy.failOpen ? null : failClosed();
     }
   }
 
+  /** Fires the `onError` telemetry hook, itself guarded so a throwing observer can't mask the failure. */
+  private reportError(
+    policyName: string,
+    routeId: string,
+    phase: ThrottleErrorEvent["phase"],
+    error: unknown
+  ): void {
+    try {
+      this.config.onError?.({ policyName, routeId, phase, error });
+    } catch {
+      /* observer error swallowed */
+    }
+  }
+
   /**
-   * Parses and validates a route's `meta.throttle` (cached per meta object). Route-inline policies
-   * get their synthesized identity `routeId#index` and pass the same rules as `configure`-level
-   * validation (interim enforcement here; the boot-time walk of transport route snapshots is
-   * Story 2.2).
+   * Parses and validates a route's `meta.throttle` (cached per meta object). `skip`/`override` names
+   * are checked against the configured defaults, an `override` re-scoping a gateway default is
+   * rejected, merged override values are validated, and route-inline policies get their synthesized
+   * identity `routeId#index` and pass the same rules as `configure`-level validation. Throws
+   * {@link ThrottleConfigError} on any violation (interim request-path enforcement; the boot-time
+   * walk of transport route snapshots is Story 2.2).
    */
   private parseSpec(routeMeta: unknown): ParsedRouteSpec {
     const raw = readThrottleRouteMeta(routeMeta);
@@ -250,16 +329,50 @@ export class ThrottleEngine {
     if (cached) return cached;
 
     const routeId = raw.routeId ?? UNSTAMPED_ROUTE_ID;
+    const wired = Object.keys(this.config.keySources);
+
+    for (const name of raw.skip ?? []) {
+      if (!(name in this.config.policies)) {
+        throw new ThrottleConfigError(
+          name,
+          "`skip` names a policy that is not a configured gateway default — the route would " +
+            "enforce a policy the author believes is exempt"
+        );
+      }
+    }
+    for (const [name, override] of Object.entries(raw.override ?? {})) {
+      const base = this.config.policies[name];
+      if (!base) {
+        throw new ThrottleConfigError(
+          name,
+          "`override` names a policy that is not a configured gateway default"
+        );
+      }
+      if (base.scope === "gateway") {
+        throw new ThrottleConfigError(
+          name,
+          "cannot `override` a `scope: 'gateway'` default per-route — an override is enforced " +
+            "route-scoped, which would silently detach the route from the shared gateway quota. " +
+            "Declare a separate route-inline policy instead"
+        );
+      }
+      // The merged policy is what actually runs — validate IT (an override of `limit: 0` or a
+      // `keyBy` typo would otherwise slip past all boot checks and permanently fail closed).
+      validatePolicy(
+        name,
+        { ...base, ...override },
+        { routeInline: true, keySources: wired }
+      );
+    }
+
     const inline = (raw.policies ?? []).map((policy, index) => {
       const id = `${routeId}#${index}`;
-      validatePolicy(id, policy, {
-        routeInline: true,
-        keySources: Object.keys(this.config.keySources),
-      });
+      validatePolicy(id, policy, { routeInline: true, keySources: wired });
       return { id, policy };
     });
     const spec: ParsedRouteSpec = {
       routeId,
+      unstamped: raw.routeId === undefined,
       disabled: raw.disabled === true,
       skip: new Set(raw.skip ?? []),
       override: raw.override ?? {},
@@ -276,7 +389,10 @@ function readThrottleRouteMeta(
 ): ThrottleRouteMeta | undefined {
   if (routeMeta === null || typeof routeMeta !== "object") return undefined;
   const value = (routeMeta as { throttle?: unknown }).throttle;
-  if (value === null || typeof value !== "object") return undefined;
+  // Must be a plain spec object — an array (or any non-object) is never a valid `meta.throttle`.
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
   return value as ThrottleRouteMeta;
 }
 

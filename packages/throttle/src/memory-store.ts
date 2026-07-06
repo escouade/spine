@@ -64,10 +64,22 @@ export class InMemoryThrottleStore implements ThrottleStore {
   private readonly clock: Clock;
   private readonly maxKeysPerPolicy: number;
   private sweepTimer?: ReturnType<typeof setInterval>;
+  private disposed = false;
+  /** Last time observed, so a non-monotonic custom clock can never rewind the ascending hit log. */
+  private lastNow = Number.NEGATIVE_INFINITY;
 
   constructor(options: InMemoryThrottleStoreOptions = {}) {
     this.clock = options.clock ?? monotonicClock;
     this.maxKeysPerPolicy = options.maxKeysPerPolicy ?? 10_000;
+    if (
+      !Number.isInteger(this.maxKeysPerPolicy) ||
+      this.maxKeysPerPolicy <= 0
+    ) {
+      // A NaN/0/negative default would disable the LRU bound entirely (per-policy memory DoS, AD-5).
+      throw new Error(
+        `InMemoryThrottleStore: maxKeysPerPolicy must be a positive integer (got ${this.maxKeysPerPolicy}).`
+      );
+    }
     const sweepIntervalMs = options.sweepIntervalMs ?? 60_000;
     if (sweepIntervalMs > 0) {
       this.sweepTimer = setInterval(() => this.sweep(), sweepIntervalMs);
@@ -76,7 +88,14 @@ export class InMemoryThrottleStore implements ThrottleStore {
   }
 
   async consume(key: string, policy: StorePolicy): Promise<ConsumeResult> {
-    const now = this.clock.now();
+    if (this.disposed) {
+      // A disposed store has no sweep timer and dropped its state — resurrecting it would leak an
+      // unswept space. A consume after dispose is a lifecycle bug: fail loud.
+      throw new Error(
+        "InMemoryThrottleStore: consume() called after dispose()."
+      );
+    }
+    const now = this.monotonicNow();
     let space = this.spaces.get(policy.id);
     if (!space) {
       space = { keys: new Map(), evictions: 0 };
@@ -148,11 +167,23 @@ export class InMemoryThrottleStore implements ThrottleStore {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = undefined;
     this.spaces.clear();
+    this.disposed = true;
+  }
+
+  /**
+   * Clock reading clamped to be non-decreasing: `max(now, lastNow)`. The {@link Clock} port documents
+   * a monotonic clock but cannot enforce it (a custom clock may rewind on a wall-clock adjustment) —
+   * a rewind would append an out-of-order timestamp and break the ascending-log purge invariant.
+   */
+  private monotonicNow(): number {
+    const now = Math.max(this.clock.now(), this.lastNow);
+    this.lastNow = now;
+    return now;
   }
 
   /** Reclaims keys whose every hit expired (they would otherwise linger until next access). */
   private sweep(): void {
-    const now = this.clock.now();
+    const now = this.monotonicNow();
     for (const space of this.spaces.values()) {
       for (const [key, log] of space.keys) {
         const cutoff = now - log.windowMs;

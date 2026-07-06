@@ -85,7 +85,15 @@ function bootIpc(): IpcHarness {
     {
       name: "ipc",
       policies: {
-        perSender: { limit: 3, windowMs: 1000, keyBy: "sender" },
+        // Gateway-scoped: IPC channels are not `routeId`-stamped until Story 2.1, so a route-scoped
+        // policy would fail loud on the unstamped target (AD-3/AD-7). Keyed by sender, one shared
+        // gateway bucket per renderer is exactly the intended IPC semantics here.
+        perSender: {
+          limit: 3,
+          windowMs: 1000,
+          keyBy: "sender",
+          scope: "gateway",
+        },
       },
       keySources: { sender: senderKeySource() },
       emitRawKey: false,

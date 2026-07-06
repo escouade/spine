@@ -15,6 +15,7 @@ import { FakeClock } from "./testing";
 import {
   readThrottleOutcome,
   type LimitReachedEvent,
+  type ThrottleErrorEvent,
   type ThrottlePolicy,
   type ThrottleStore,
 } from "./throttle.types";
@@ -73,10 +74,21 @@ function recordingStore(): {
   return { store, consumed };
 }
 
-const route = (throttle?: Partial<ThrottleRouteMeta>): LoadedRoute<Ctx> => ({
+// Every real route helper stamps a `routeId` (AD-3); default to a stamped one so route-scoped
+// defaults resolve to a concrete bucket. Unstamped targets are exercised explicitly via `bareTarget`.
+const route = (
+  throttle: Partial<ThrottleRouteMeta> = {}
+): LoadedRoute<Ctx> => ({
   guards: [],
   invoke: () => "handled",
-  meta: throttle ? { throttle: { routeId: "GET /r", ...throttle } } : {},
+  meta: { throttle: { routeId: "GET /r", ...throttle } },
+});
+
+/** A hand-built target with NO stamped `meta.throttle.routeId` (the unstamped/legacy case). */
+const bareTarget = (): LoadedRoute<Ctx> => ({
+  guards: [],
+  invoke: () => "handled",
+  meta: {},
 });
 
 const dispatch = (
@@ -170,7 +182,126 @@ describe("ThrottleEngine composition (Story 1.7)", () => {
     const ctx: Ctx = {};
     await dispatch(interceptor, route(), ctx);
     expect(onOutcome).toHaveBeenCalledTimes(1);
-    expect(onOutcome).toHaveBeenCalledWith(ctx, readThrottleOutcome(ctx));
+    // AD-8: the observer receives the ctx and reads the outcome slot itself (no outcome argument).
+    expect(onOutcome).toHaveBeenCalledWith(ctx);
+    expect(readThrottleOutcome(ctx)).toBeDefined();
+  });
+
+  it("reports Retry-After as the LATEST reset over all rejecting policies, not the soonest", async () => {
+    // Two policies exhausted at once: a short window (200ms) and a long one (5000ms), same key.
+    const interceptor = makeInterceptor({
+      short: policy({ limit: 1, windowMs: 200 }),
+      long: policy({ limit: 1, windowMs: 5000 }),
+    });
+
+    expect((await dispatch(interceptor)).ok).toBe(true); // both accept their single slot
+    const rejected = await dispatch(interceptor); // both reject
+    // Retrying at 200ms would still hit `long` — the client must be told the latest, 5000ms.
+    expect(rejected).toEqual({
+      ok: false,
+      code: "TOO_MANY_REQUESTS",
+      meta: { retryAfterMs: 5000 },
+    });
+  });
+
+  it("a throwing onOutcome/onLimitReached observer never breaks enforcement", async () => {
+    const onOutcome = () => {
+      throw new Error("observer boom");
+    };
+    const onLimitReached = () => {
+      throw new Error("observer boom");
+    };
+    const interceptor = makeInterceptor(
+      { p: policy({ limit: 1 }) },
+      { onOutcome, onLimitReached }
+    );
+
+    // Accept path still returns ok despite a throwing onOutcome.
+    expect((await dispatch(interceptor)).ok).toBe(true);
+    // Reject path still returns the 429 despite both observers throwing.
+    expect((await dispatch(interceptor)).ok).toBe(false);
+  });
+});
+
+describe("fail-closed telemetry (FR-14, onError)", () => {
+  it("fires onError on a throwing selector and on a store outage (both fail-closed and fail-open)", async () => {
+    const selectorErrors: ThrottleErrorEvent[] = [];
+    const closed = makeInterceptor(
+      {
+        broken: policy({
+          keyBy: () => {
+            throw new Error("selector boom");
+          },
+        }),
+      },
+      { onError: (e) => selectorErrors.push(e) }
+    );
+    expect((await dispatch(closed)).ok).toBe(false); // fail-closed rejection…
+    expect(selectorErrors).toHaveLength(1); // …still surfaced telemetry
+    expect(selectorErrors[0]).toMatchObject({
+      policyName: "broken",
+      routeId: "GET /r",
+      phase: "selector",
+    });
+
+    const storeErrors: ThrottleErrorEvent[] = [];
+    const failingStore: ThrottleStore = {
+      consume: () => Promise.reject(new Error("store down")),
+    };
+    const openStore = makeInterceptor(
+      { p: policy({ failOpen: true }) },
+      { onError: (e) => storeErrors.push(e) },
+      failingStore
+    );
+    expect((await dispatch(openStore)).ok).toBe(true); // fail-open passes…
+    expect(storeErrors[0]).toMatchObject({ phase: "store", policyName: "p" }); // …still telemetered
+  });
+});
+
+describe("selector return-value handling (FR-6 edge cases)", () => {
+  it("treats an undefined selector return as a null-skip (not a permanent fail-closed)", async () => {
+    const { store, consumed } = recordingStore();
+    const interceptor = makeInterceptor(
+      {
+        skip: policy({ keyBy: () => undefined as unknown as string }),
+        real: policy({ limit: 10 }),
+      },
+      {},
+      store
+    );
+    const envelope = await dispatch(interceptor);
+    expect(envelope.ok).toBe(true);
+    expect(consumed.map((c) => c.id)).toEqual(["real"]); // `skip` opted out, never consumed
+  });
+
+  it("fail-closes with onError on a non-string selector return", async () => {
+    const errors: ThrottleErrorEvent[] = [];
+    const interceptor = makeInterceptor(
+      { bad: policy({ keyBy: () => 42 as unknown as string }) },
+      { onError: (e) => errors.push(e) }
+    );
+    expect((await dispatch(interceptor)).ok).toBe(false);
+    expect(errors[0]).toMatchObject({ phase: "selector", policyName: "bad" });
+  });
+});
+
+describe("unstamped-target guard (AD-3/AD-7)", () => {
+  it("fails loud when a route-scoped policy hits a target with no stamped routeId", async () => {
+    const interceptor = makeInterceptor({ perRoute: policy() }); // route-scoped default
+    const envelope = await dispatch(interceptor, bareTarget());
+    // The ThrottleConfigError escapes the interceptor; the pipeline maps it to an error envelope.
+    expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+  });
+
+  it("allows a gateway-scoped policy on an unstamped target (shared bucket is intended)", async () => {
+    const { store, consumed } = recordingStore();
+    const interceptor = makeInterceptor(
+      { global: policy({ scope: "gateway" }) },
+      {},
+      store
+    );
+    expect((await dispatch(interceptor, bareTarget())).ok).toBe(true);
+    expect(consumed.map((c) => c.id)).toEqual(["global"]);
   });
 });
 
@@ -267,7 +398,7 @@ describe("short-circuit and observability (FR-9, FR-14)", () => {
       guards: [{ canActivate }],
       input: { parse },
       invoke,
-      meta: {},
+      meta: { throttle: { routeId: "GET /guarded" } },
     };
     const interceptor = makeInterceptor({ p: policy({ limit: 1 }) });
 
@@ -403,5 +534,66 @@ describe("route spec semantics (AD-3 groundwork for Story 1.8)", () => {
     );
     // The ThrottleConfigError escapes the interceptor; the pipeline maps it to an error envelope.
     expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+  });
+
+  it("rejects an `override` that would re-scope a gateway-scoped default to route (AD-3)", async () => {
+    const interceptor = makeInterceptor({
+      global: policy({ scope: "gateway" }),
+    });
+    const envelope = await dispatch(
+      interceptor,
+      route({ override: { global: { limit: 1 } } })
+    );
+    expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+  });
+
+  it("validates the MERGED override values (an override of limit:0 fails, not NaN Retry-After)", async () => {
+    const interceptor = makeInterceptor({ login: policy({ limit: 100 }) });
+    const envelope = await dispatch(
+      interceptor,
+      route({ override: { login: { limit: 0 } } })
+    );
+    expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+  });
+
+  it("rejects `skip`/`override` naming a policy that is not a configured default", async () => {
+    const interceptor = makeInterceptor({ real: policy() });
+    expect(await dispatch(interceptor, route({ skip: ["typo"] }))).toEqual({
+      ok: false,
+      code: "INTERNAL",
+    });
+    expect(
+      await dispatch(interceptor, route({ override: { typo: { limit: 1 } } }))
+    ).toEqual({ ok: false, code: "INTERNAL" });
+  });
+
+  it("gives an overridden default its OWN store space so a per-route maxKeys can't shrink the shared space", async () => {
+    const { store, consumed } = recordingStore();
+    const interceptor = makeInterceptor(
+      { global: policy({ limit: 5 }) },
+      {},
+      store
+    );
+
+    const overridden: LoadedRoute<Ctx> = {
+      guards: [],
+      invoke: () => 0,
+      meta: {
+        throttle: { routeId: "GET /a", override: { global: { maxKeys: 2 } } },
+      },
+    };
+    const plain: LoadedRoute<Ctx> = {
+      guards: [],
+      invoke: () => 0,
+      meta: { throttle: { routeId: "GET /b" } },
+    };
+    await dispatch(interceptor, overridden);
+    await dispatch(interceptor, plain);
+
+    const idOf = (routeId: string) =>
+      consumed.find((c) => c.key.startsWith(`${routeId}:`))?.id;
+    // The overridden route counts under its own space id; the plain route under the base name.
+    expect(idOf("GET /a")).toBe("global@GET /a");
+    expect(idOf("GET /b")).toBe("global");
   });
 });
