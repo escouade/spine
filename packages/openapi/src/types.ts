@@ -24,14 +24,26 @@ export interface OpenApiTag {
   description?: string;
 }
 
+/**
+ * A JSON-safe OpenAPI 3.1 Security Scheme Object (e.g. `{ type: "http", scheme: "bearer" }`) — an
+ * OpenAPI object, NOT a JSON Schema, so it stays a plain JSON-safe record (AD-14).
+ */
+export type SecuritySchemeObject = { [key: string]: JsonValue };
+
+/**
+ * A guard's self-declared security (AD-9): the scheme `name` (its `components.securitySchemes` key and
+ * per-operation `security` requirement) and its {@link SecuritySchemeObject}. A guard class carries this
+ * as `static openapiSecurity: OpenApiSecurity`; the builder reads it off each route's guard instances.
+ */
+export interface OpenApiSecurity {
+  name: string;
+  scheme: SecuritySchemeObject;
+}
+
 export interface OpenApiComponents {
   schemas?: { [name: string]: JsonSchemaObject };
-  /**
-   * Security-scheme objects (e.g. `{ type: "http", scheme: "bearer" }`) — these
-   * are OpenAPI objects, NOT JSON Schemas, so they are typed as plain JSON-safe
-   * objects. The builder (Story 1.7) refines the shape.
-   */
-  securitySchemes?: { [name: string]: { [key: string]: JsonValue } };
+  /** Security-scheme objects, keyed by name — derived from guards (AD-9), never a JSON Schema. */
+  securitySchemes?: { [name: string]: SecuritySchemeObject };
 }
 
 export interface OpenApiDocument {

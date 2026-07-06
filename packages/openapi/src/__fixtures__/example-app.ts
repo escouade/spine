@@ -19,6 +19,7 @@ import type {
   HttpRaw,
   HttpRoute,
 } from "@spinejs/http-gateway";
+import type { OpenApiSecurity } from "../types";
 
 /**
  * Shared example-app fixture for the builder stories (1.3–1.7). Each builder story adds the routes it
@@ -171,6 +172,24 @@ class StreamController {
   );
 }
 
+// A guard self-declaring its OpenAPI security scheme (AD-9): the builder reads the static off the
+// concrete class of each route's guard instances.
+class BearerGuard implements Guard<GatewayContext> {
+  static openapiSecurity: OpenApiSecurity = {
+    name: "bearerAuth",
+    scheme: { type: "http", scheme: "bearer" },
+  };
+  canActivate(): boolean {
+    return true;
+  }
+}
+
+@Controller({})
+class SecuredController {
+  // `guards: [BearerGuard]` → per-op `security: [{ bearerAuth: [] }]` + a `bearerAuth` scheme component.
+  me = get("/me", { guards: [BearerGuard] }, () => ({ ok: true }));
+}
+
 const contextFactory = {
   create: (honoCtx: HttpRaw): HttpBaseContext => ({ honoCtx }),
 };
@@ -193,5 +212,11 @@ export function fixtureRoutes(): readonly HttpRoute[] {
   gateway.register(getRoutes(new CatalogController(), noGuards) as HttpRoute[]);
   gateway.register(getRoutes(new ReportsController(), noGuards) as HttpRoute[]);
   gateway.register(getRoutes(new StreamController(), noGuards) as HttpRoute[]);
+  const securedGuards = new Map<GuardConstructor, Guard<GatewayContext>>([
+    [BearerGuard, new BearerGuard()],
+  ]);
+  gateway.register(
+    getRoutes(new SecuredController(), securedGuards) as HttpRoute[]
+  );
   return gateway.routes;
 }

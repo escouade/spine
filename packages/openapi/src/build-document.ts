@@ -12,7 +12,13 @@ import type {
 } from "@spinejs/http-gateway";
 import { ComponentRegistry } from "./component-registry";
 import { ZodSchemaConverter } from "./zod-schema-converter";
-import type { OpenApiDocument, OpenApiInfo, OpenApiServer } from "./types";
+import type {
+  OpenApiDocument,
+  OpenApiInfo,
+  OpenApiSecurity,
+  OpenApiServer,
+  SecuritySchemeObject,
+} from "./types";
 
 /** Configuration the pure builder needs. The full `OpenApiModule.configure` surface is Story 3.1. */
 export interface BuildDocumentConfig {
@@ -48,6 +54,8 @@ export function buildOpenApiDocument(
 ): OpenApiDocument {
   const excluded = new Set(config.exclude ?? []);
   const registry = new ComponentRegistry();
+  // Guard-derived security schemes, accumulated across every operation (AD-9), emitted sorted (AD-6).
+  const securitySchemes = new Map<string, SecuritySchemeObject>();
 
   // Group surviving routes by OpenAPI path → method. First registration of a {method, path} wins
   // (duplicate registration is an author error; full dedup policy is AD-8, Story 1.4).
@@ -78,7 +86,8 @@ export function buildOpenApiDocument(
         pathItem[method.toLowerCase()] = buildOperation(
           route,
           converter,
-          registry
+          registry,
+          securitySchemes
         );
       }
     }
@@ -86,20 +95,41 @@ export function buildOpenApiDocument(
   }
 
   const schemas = registry.toSchemas();
+  const secSchemes = sortedSecuritySchemes(securitySchemes);
+  const components =
+    schemas !== undefined || secSchemes !== undefined
+      ? {
+          ...(schemas && { schemas }),
+          ...(secSchemes && { securitySchemes: secSchemes }),
+        }
+      : undefined;
   return {
     openapi: "3.1.0",
     info: config.info,
     ...(config.servers && { servers: config.servers }),
     paths,
-    ...(schemas && { components: { schemas } }),
+    ...(components && { components }),
   };
+}
+
+/** The accumulated security schemes in sorted key order (AD-6), or `undefined` when none were declared. */
+function sortedSecuritySchemes(
+  securitySchemes: Map<string, SecuritySchemeObject>
+): { [name: string]: SecuritySchemeObject } | undefined {
+  if (securitySchemes.size === 0) return undefined;
+  const sorted: { [name: string]: SecuritySchemeObject } = {};
+  for (const name of [...securitySchemes.keys()].sort()) {
+    sorted[name] = securitySchemes.get(name) as SecuritySchemeObject;
+  }
+  return sorted;
 }
 
 /** Build a single OpenAPI operation object from a route's address + meta. */
 function buildOperation(
   route: HttpRoute,
   converter: SchemaConverter,
-  registry: ComponentRegistry
+  registry: ComponentRegistry,
+  securitySchemes: Map<string, SecuritySchemeObject>
 ): JsonValue {
   const meta = (route.meta ?? {}) as HttpRouteMeta;
   const inputs = meta.inputs ?? {};
@@ -125,6 +155,10 @@ function buildOperation(
   );
   if (parameters.length > 0) op.parameters = parameters;
 
+  // Guard-derived security (AD-9) — read before the sse/body branch so SSE ops with guards get it too.
+  const security = buildSecurity(route, securitySchemes);
+  if (security !== undefined) op.security = security;
+
   if (meta.sse) {
     // SSE routes are un-enveloped event streams (AD-15): a GET with a `text/event-stream` success
     // response, no request body, no `{ ok, data }` envelope. Params/query still map above.
@@ -147,6 +181,47 @@ function buildOperation(
   op.responses = buildResponses(meta, converter, registry, operationId);
 
   return op;
+}
+
+/**
+ * Derive an operation's `security` from its guards (AD-9). Each guard's concrete class may carry a
+ * `static openapiSecurity = { name, scheme }`; the builder registers each `scheme` under `name` in the
+ * shared `securitySchemes` map (a second guard claiming the same `name` with a **different** scheme is a
+ * fail-fast build error) and returns a single requirement object listing every declared name (sorted,
+ * empty scopes) — all of a route's guards must pass (AND). Guards without the static contribute nothing.
+ */
+function buildSecurity(
+  route: HttpRoute,
+  securitySchemes: Map<string, SecuritySchemeObject>
+): JsonValue | undefined {
+  const names: string[] = [];
+  for (const guard of route.guards) {
+    const declared = (
+      guard.constructor as unknown as { openapiSecurity?: OpenApiSecurity }
+    ).openapiSecurity;
+    if (declared === undefined) continue; // a guard without the static contributes no scheme (AD-9)
+    const { name, scheme } = declared;
+    const existing = securitySchemes.get(name);
+    if (existing !== undefined && !schemesEqual(existing, scheme)) {
+      throw new Error(
+        `OpenAPI: two guards declare security scheme "${name}" with different definitions.`
+      );
+    }
+    securitySchemes.set(name, scheme);
+    if (!names.includes(name)) names.push(name);
+  }
+  if (names.length === 0) return undefined;
+  const requirement: { [name: string]: JsonValue } = {};
+  for (const name of names.sort()) requirement[name] = [];
+  return [requirement];
+}
+
+/** Structural equality for two security schemes (stable key order from the guard's static literal). */
+function schemesEqual(
+  a: SecuritySchemeObject,
+  b: SecuritySchemeObject
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /**

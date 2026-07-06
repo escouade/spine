@@ -21,6 +21,7 @@ import type {
 } from "@spinejs/http-gateway";
 import { buildOpenApiDocument } from "./build-document";
 import type { BuildDocumentConfig } from "./build-document";
+import type { OpenApiSecurity } from "./types";
 import { fixtureRoutes } from "./__fixtures__/example-app";
 
 const config: BuildDocumentConfig = {
@@ -44,6 +45,13 @@ function components(doc: ReturnType<typeof build>): Record<string, Op> {
     {}
   );
 }
+function securitySchemes(
+  doc: ReturnType<typeof build>
+): Record<string, Op> | undefined {
+  return (
+    doc.components as { securitySchemes?: Record<string, Op> } | undefined
+  )?.securitySchemes;
+}
 
 const contextFactory = {
   create: (honoCtx: HttpRaw): HttpBaseContext => ({ honoCtx }),
@@ -51,13 +59,16 @@ const contextFactory = {
 const noGuards = new Map<GuardConstructor, Guard<GatewayContext>>();
 
 /** Build a document from a single ad-hoc controller instance (for isolated edge-case routes). */
-function docFromController(controller: object) {
+function docFromController(
+  controller: object,
+  guardMap: Map<GuardConstructor, Guard<GatewayContext>> = noGuards
+) {
   const gateway = new HttpGateway(
     new ZodValidator(),
     new DefaultHttpErrorMapper(),
     contextFactory
   );
-  gateway.register(getRoutes(controller, noGuards) as HttpRoute[]);
+  gateway.register(getRoutes(controller, guardMap) as HttpRoute[]);
   return buildOpenApiDocument(gateway.routes, config);
 }
 
@@ -416,6 +427,127 @@ describe("buildOpenApiDocument", () => {
       "200"
     ];
     expect(Object.keys(ok.content as object)).toEqual(["application/json"]);
+  });
+
+  it("derives per-op security + a securitySchemes component from a guard static (AD-9, AC #1)", () => {
+    const doc = build();
+    expect(paths(doc)["/me"].get.security).toEqual([{ bearerAuth: [] }]);
+    expect(securitySchemes(doc)?.bearerAuth).toEqual({
+      type: "http",
+      scheme: "bearer",
+    });
+    // A security scheme is NOT a JSON Schema — it never leaks into components.schemas.
+    expect(components(doc).bearerAuth).toBeUndefined();
+    // Unsecured routes carry no `security` key.
+    expect(paths(doc)["/users"].get.security).toBeUndefined();
+  });
+
+  it("fails fast when two guards declare one scheme name with different definitions (AC #2)", () => {
+    class GuardA implements Guard<GatewayContext> {
+      static openapiSecurity: OpenApiSecurity = {
+        name: "auth",
+        scheme: { type: "http", scheme: "bearer" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    class GuardB implements Guard<GatewayContext> {
+      static openapiSecurity: OpenApiSecurity = {
+        name: "auth",
+        scheme: { type: "apiKey", in: "header", name: "X-Key" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    @Controller({})
+    class Conflict {
+      a = get("/a", { guards: [GuardA] }, () => ({ ok: true }));
+      b = get("/b", { guards: [GuardB] }, () => ({ ok: true }));
+    }
+    const guardMap = new Map<GuardConstructor, Guard<GatewayContext>>([
+      [GuardA, new GuardA()],
+      [GuardB, new GuardB()],
+    ]);
+    expect(() => docFromController(new Conflict(), guardMap)).toThrow(/auth/);
+  });
+
+  it("contributes no scheme for a guard without the static field (AC #3)", () => {
+    class PlainGuard implements Guard<GatewayContext> {
+      canActivate() {
+        return true;
+      }
+    }
+    @Controller({})
+    class Unsecured {
+      x = get("/x", { guards: [PlainGuard] }, () => ({ ok: true }));
+    }
+    const guardMap = new Map<GuardConstructor, Guard<GatewayContext>>([
+      [PlainGuard, new PlainGuard()],
+    ]);
+    const doc = docFromController(new Unsecured(), guardMap);
+    expect(paths(doc)["/x"].get.security).toBeUndefined();
+    expect(securitySchemes(doc)).toBeUndefined();
+  });
+
+  it("lists multiple guards in one sorted requirement object, schemes sorted (AND, AD-6)", () => {
+    class Zebra implements Guard<GatewayContext> {
+      static openapiSecurity: OpenApiSecurity = {
+        name: "zebra",
+        scheme: { type: "apiKey", in: "header", name: "Z" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    class Alpha implements Guard<GatewayContext> {
+      static openapiSecurity: OpenApiSecurity = {
+        name: "alpha",
+        scheme: { type: "http", scheme: "basic" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    @Controller({})
+    class Multi {
+      x = get("/x", { guards: [Zebra, Alpha] }, () => ({ ok: true }));
+    }
+    const guardMap = new Map<GuardConstructor, Guard<GatewayContext>>([
+      [Zebra, new Zebra()],
+      [Alpha, new Alpha()],
+    ]);
+    const doc = docFromController(new Multi(), guardMap);
+    // One requirement object (AND), names sorted.
+    expect(paths(doc)["/x"].get.security).toEqual([{ alpha: [], zebra: [] }]);
+    expect(Object.keys(securitySchemes(doc) ?? {})).toEqual(["alpha", "zebra"]);
+  });
+
+  it("applies security to an SSE operation too (guards read before the sse branch)", () => {
+    class StreamGuard implements Guard<GatewayContext> {
+      static openapiSecurity: OpenApiSecurity = {
+        name: "streamAuth",
+        scheme: { type: "http", scheme: "bearer" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    @Controller({})
+    class SecuredStream {
+      s = sse("/s", { guards: [StreamGuard] }, async function* () {});
+    }
+    const guardMap = new Map<GuardConstructor, Guard<GatewayContext>>([
+      [StreamGuard, new StreamGuard()],
+    ]);
+    const op = paths(docFromController(new SecuredStream(), guardMap))["/s"]
+      .get;
+    expect(op.security).toEqual([{ streamAuth: [] }]);
+    // Still an un-enveloped event stream.
+    expect((op.responses as Record<string, Op>)["200"]).toMatchObject({
+      content: { "text/event-stream": { schema: { type: "string" } } },
+    });
   });
 
   it("does not surface author-provided examples at operation level", () => {
