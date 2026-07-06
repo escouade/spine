@@ -181,6 +181,56 @@ describe.each(HARNESS_DRIVERS)("migration verbs on $name", (driver) => {
     ).toHaveLength(0);
     expect(await list(migrator)).toHaveLength(1); // tracking re-recorded
   });
+
+  test("two connections keep independent tracking tables (SM-2, AD-6)", async () => {
+    const dirA = makeExecutableMigrationsDir();
+    const dirB = makeExecutableMigrationsDir();
+    class MigA extends Migration {
+      override async up(): Promise<void> {
+        this.addSql("create table iso_a (id integer primary key);");
+      }
+      override async down(): Promise<void> {
+        this.addSql("drop table iso_a;");
+      }
+    }
+    class MigB extends Migration {
+      override async up(): Promise<void> {
+        this.addSql("create table iso_b (id integer primary key);");
+      }
+      override async down(): Promise<void> {
+        this.addSql("drop table iso_b;");
+      }
+    }
+    // Distinct folders AND distinct tracking tables — so even on one shared postgres database (the
+    // harness's single clientUrl), each connection's history is isolated by config (AD-6).
+    const ormA = await initVerbOrm(driver, dirA.path, {
+      tableName: "m_iso_a",
+      migrationsList: [{ name: "MigA", class: MigA }],
+    });
+    const ormB = await initVerbOrm(driver, dirB.path, {
+      tableName: "m_iso_b",
+      migrationsList: [{ name: "MigB", class: MigB }],
+    });
+    try {
+      await up(ormA.getMigrator());
+      await up(ormB.getMigrator());
+
+      // Each tracking table holds ONLY its own migration — never the other connection's.
+      expect((await list(ormA.getMigrator())).map((r) => r.name)).toEqual([
+        "MigA",
+      ]);
+      expect((await list(ormB.getMigrator())).map((r) => r.name)).toEqual([
+        "MigB",
+      ]);
+      expect(await pending(ormA.getMigrator())).toHaveLength(0);
+      expect(await pending(ormB.getMigrator())).toHaveLength(0);
+    } finally {
+      await ormA.close(true).catch(() => {});
+      await ormB.close(true).catch(() => {});
+      dirA.cleanup();
+      dirB.cleanup();
+    }
+  });
 });
 
 // NFR-1 — the runtime and the CLI resolve the SAME connection config from one AppModule, no second
