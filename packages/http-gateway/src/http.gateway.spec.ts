@@ -12,6 +12,7 @@ import { get } from "./http-routes";
 import type { HttpRouteMeta } from "./http-routes";
 import { ZodValidator } from "./zod.validator";
 import { DefaultHttpErrorMapper } from "./default-error.mapper";
+import { responseHeadersOf } from "./http-base.types";
 import type { HttpBaseContext, HttpRaw } from "./http-base.types";
 
 const contextFactory = {
@@ -83,6 +84,100 @@ describe("failure envelope meta (FailureMeta seam)", () => {
       code: "TOO_MANY_REQUESTS",
       meta: { retryAfterMs: 2000 },
     });
+  });
+});
+
+describe("response-headers bag (AD-8, Story 1.2)", () => {
+  /** Interceptor standing in for any producer (e.g. a battery preset) writing dynamic headers. */
+  const bagWriter: ChainInterceptor<HttpBaseContext, string, HttpRoute> = {
+    intercept: (_t, ctx, _i, next) => {
+      Object.assign(responseHeadersOf(ctx), {
+        "RateLimit-Limit": "5",
+        "RateLimit-Remaining": "4",
+      });
+      return next();
+    },
+  };
+
+  function gatewayWith(
+    interceptors: ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
+  ): HttpGateway {
+    const gw = new HttpGateway(
+      new ZodValidator(),
+      new DefaultHttpErrorMapper(),
+      contextFactory,
+      interceptors
+    );
+    return gw;
+  }
+
+  @Controller({})
+  class MixedController {
+    ok = get("/ok", {}, () => "fine");
+    boom = get("/boom", {}, () => {
+      throw new Error("boom");
+    });
+    styled = get(
+      "/styled",
+      { headers: { "RateLimit-Limit": "route-wins", "X-Static": "s" } },
+      () => "fine"
+    );
+  }
+
+  it("merges the bag into success responses", async () => {
+    const gw = gatewayWith([bagWriter]);
+    gw.register(getRoutes(new MixedController(), noGuards) as HttpRoute[]);
+
+    const res = await gw.app.request("/ok");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("RateLimit-Limit")).toBe("5");
+    expect(res.headers.get("RateLimit-Remaining")).toBe("4");
+  });
+
+  it("merges the bag into error responses too", async () => {
+    const gw = gatewayWith([bagWriter]);
+    gw.register(getRoutes(new MixedController(), noGuards) as HttpRoute[]);
+
+    const res = await gw.app.request("/boom");
+    expect(res.status).toBe(500);
+    expect(res.headers.get("RateLimit-Limit")).toBe("5");
+    expect(res.headers.get("RateLimit-Remaining")).toBe("4");
+  });
+
+  it("applies the merge order: gateway defaults < bag < route meta.headers", async () => {
+    const contentTypeWriter: ChainInterceptor<
+      HttpBaseContext,
+      string,
+      HttpRoute
+    > = {
+      intercept: (_t, ctx, _i, next) => {
+        Object.assign(responseHeadersOf(ctx), {
+          "Content-Type": "application/json; charset=utf-8", // bag beats the gateway default
+          "RateLimit-Limit": "5", // …but the route's static header beats the bag
+        });
+        return next();
+      },
+    };
+    const gw = gatewayWith([contentTypeWriter]);
+    gw.register(getRoutes(new MixedController(), noGuards) as HttpRoute[]);
+
+    const res = await gw.app.request("/styled");
+    expect(res.headers.get("Content-Type")).toBe(
+      "application/json; charset=utf-8"
+    );
+    expect(res.headers.get("RateLimit-Limit")).toBe("route-wins");
+    expect(res.headers.get("X-Static")).toBe("s");
+  });
+
+  it("leaves untouched requests byte-identical (no bag, no new headers)", async () => {
+    const gw = gatewayWith([]);
+    gw.register(getRoutes(new MixedController(), noGuards) as HttpRoute[]);
+
+    const res = await gw.app.request("/ok");
+    // Exactly the pre-seam header set: the JSON content type, nothing else.
+    expect([...res.headers.keys()]).toEqual(["content-type"]);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(await res.json()).toEqual({ ok: true, data: "fine" });
   });
 });
 
