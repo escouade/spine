@@ -22,7 +22,13 @@ export { MAX_POLICY_LIMIT, ThrottleConfigError } from "./policy-validation";
 export { InMemoryThrottleStore, monotonicClock } from "./memory-store";
 export type { InMemoryThrottleStoreOptions } from "./memory-store";
 export { buildStorageKey, hashKey } from "./key-pipeline";
+export { ThrottleEngine } from "./engine";
+export type {
+  ResolvedThrottleConfig,
+  ThrottlePolicyOverride,
+  ThrottleRouteMeta,
+  ThrottleRouteOption,
+} from "./engine";
 export { ThrottleInterceptor } from "./interceptor";
-export type { ResolvedThrottleConfig } from "./interceptor";
 export { ThrottleModule, throttleInterceptorRef } from "./throttle.module";
 export type { ThrottleModuleOptions } from "./throttle.module";

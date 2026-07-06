@@ -80,6 +80,11 @@ export const throttleStoreContract: readonly StoreContractCase[] = [
         );
         const counts = results.map((r) => r.totalHits).sort((x, y) => x - y);
         expectEqual(counts, [1, 2, 3, 4, 5, 5, 5, 5, 5, 5], "atomicity");
+        expectEqual(
+          results.filter((r) => r.accepted).length,
+          5,
+          "atomicity: exactly `limit` calls accepted"
+        );
       }),
   },
   {
@@ -106,7 +111,11 @@ export const throttleStoreContract: readonly StoreContractCase[] = [
         const rejected = await store.consume("k", policy());
         expectEqual(
           rejected,
-          { totalHits: 3, resetMs: 750 } satisfies ConsumeResult,
+          {
+            accepted: false,
+            totalHits: 3,
+            resetMs: 750,
+          } satisfies ConsumeResult,
           "post-decision reject state"
         );
       }),
@@ -136,7 +145,11 @@ export const throttleStoreContract: readonly StoreContractCase[] = [
         clock.tick(800); // t=1000: both t=0 hits expired — and ONLY those may ever have counted
         expectEqual(
           await store.consume("k", p),
-          { totalHits: 1, resetMs: 1000 } satisfies ConsumeResult,
+          {
+            accepted: true,
+            totalHits: 1,
+            resetMs: 1000,
+          } satisfies ConsumeResult,
           "no refund: only the originally accepted hits occupied the window"
         );
       }),
@@ -171,7 +184,11 @@ export const throttleStoreContract: readonly StoreContractCase[] = [
         clock.tick(5000); // idle far past the window
         expectEqual(
           await store.consume("k", policy()),
-          { totalHits: 1, resetMs: 1000 } satisfies ConsumeResult,
+          {
+            accepted: true,
+            totalHits: 1,
+            resetMs: 1000,
+          } satisfies ConsumeResult,
           "fresh window after idle expiry"
         );
       }),

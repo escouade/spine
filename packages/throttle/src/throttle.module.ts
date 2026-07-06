@@ -4,7 +4,7 @@ import type { GatewayContext } from "@spinejs/gateway-core";
 import { validatePolicies } from "./policy-validation";
 import { InMemoryThrottleStore } from "./memory-store";
 import { ThrottleInterceptor } from "./interceptor";
-import type { ResolvedThrottleConfig } from "./interceptor";
+import type { ResolvedThrottleConfig } from "./engine";
 import type {
   Clock,
   KeySelector,

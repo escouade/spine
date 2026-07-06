@@ -62,6 +62,12 @@ export interface StorePolicy {
 
 /** Post-decision state of one `consume` call (AD-4). `remaining = limit − totalHits` is derived, never stored. */
 export interface ConsumeResult {
+  /**
+   * Whether the hit was accepted (appended to the log). Needed as an explicit discriminator:
+   * the limit-th accept and a rejection both report `totalHits = limit` / `remaining = 0`, yet
+   * one must succeed (with `RateLimit-Remaining: 0`) and the other must 429.
+   */
+  accepted: boolean;
   /** Accept → the new in-window count. Reject → exactly `limit`. */
   totalHits: number;
   /** Relative ms until the oldest in-window slot frees (reject → the exact `retryAfterMs`). */

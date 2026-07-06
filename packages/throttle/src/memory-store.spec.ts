@@ -35,11 +35,13 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
     const store = makeStore(clock);
 
     expect(await store.consume("k", policy())).toEqual({
+      accepted: true,
       totalHits: 1,
       resetMs: 1000,
     });
     clock.tick(100);
     expect(await store.consume("k", policy())).toEqual({
+      accepted: true,
       totalHits: 2,
       resetMs: 900, // oldest hit (t=0) frees at t=1000
     });
@@ -56,7 +58,7 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
 
     clock.tick(100); // t=500
     const rejected = await store.consume("k", policy());
-    expect(rejected).toEqual({ totalHits: 3, resetMs: 500 }); // oldest (t=0) + 1000 − 500
+    expect(rejected).toEqual({ accepted: false, totalHits: 3, resetMs: 500 }); // oldest (t=0) + 1000 − 500
   });
 
   it("does not grow the log on rejection (rejects are free — memory O(limit))", async () => {
@@ -72,7 +74,8 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
     }
     clock.tick(50); // t=1000 — the t=0 hits free exactly at oldest + windowMs
     expect(await store.consume("k", policy())).toEqual({
-      totalHits: 1, // accepted: the 19 rejections above never grew the log
+      accepted: true,
+      totalHits: 1, // the 19 rejections above never grew the log
       resetMs: 1000,
     });
   });
@@ -87,8 +90,14 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
     await store.consume("k", policy()); // t=800 — full
 
     clock.tick(201); // t=1001: the t=0 hit expired, exactly one slot free
-    expect((await store.consume("k", policy())).totalHits).toBe(3); // accepted, full again
-    expect((await store.consume("k", policy())).totalHits).toBe(3); // rejected: still full
+    expect(await store.consume("k", policy())).toMatchObject({
+      accepted: true,
+      totalHits: 3, // accepted, full again
+    });
+    expect(await store.consume("k", policy())).toMatchObject({
+      accepted: false,
+      totalHits: 3, // rejected: still full
+    });
   });
 
   it("purges expired entries lazily on access", async () => {
@@ -98,6 +107,7 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
 
     clock.tick(1500); // whole window slid past
     expect(await store.consume("k", policy())).toEqual({
+      accepted: true,
       totalHits: 1,
       resetMs: 1000, // fresh window
     });
@@ -138,6 +148,7 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
     (store as unknown as { sweep(): void }).sweep();
     // Observable effect: the key restarts a fresh window as if never seen.
     expect(await store.consume("gone", policy())).toEqual({
+      accepted: true,
       totalHits: 1,
       resetMs: 1000,
     });
