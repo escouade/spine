@@ -591,8 +591,16 @@ NODE_ENV=development spine-migrate migration:fresh --force-drop --module ./dist/
 Il refuse (avant de toucher la base) sauf si **tout** est vrai : `NODE_ENV` vaut explicitement
 `development` ou `test` ; le flag orthogonal `--force-drop` est présent (le label d'env seul n'autorise
 jamais un drop) ; et la connexion cible ne partage **pas** une base physique avec une autre connexion
-configurée (un drop ne peut pas être prouvé cibler une base distincte). Chaque refus nomme l'étape
+**de migration** (un drop ne peut pas être prouvé cibler une base distincte). Chaque refus nomme l'étape
 suivante.
+
+:::note Ce que `fresh` droppe
+`fresh` droppe les tables de votre **modèle d'entités actuel** (plus la table de suivi des migrations),
+puis ré-applique. Une table qu'une ancienne migration a créée pour une entité depuis retirée n'est
+**pas** droppée — si cette migration est rejouée, elle échouera « already exists » ; droppez ces tables
+orphelines à la main. Le refus de base partagée ne connaît que les autres connexions qui déclarent
+`migrations`, donc vous restez responsable de confirmer votre DSN avant une remise à zéro.
+:::
 
 ### Auto-migrer au démarrage (`migrateOnStart`)
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Module } from "@spinejs/core";
@@ -159,5 +159,45 @@ describe("multi-connection migration isolation (SM-2)", () => {
       /connection "analytics": executed migrations: Migration001_analytics/
     );
     expect(aList2.lines.join("\n")).not.toMatch(/default/);
+  });
+
+  it("create --connection writes only the target connection's folder (AC1)", async () => {
+    // Two connections, both with the fixture entities, each with its OWN migrations folder.
+    @Module({
+      imports: [
+        ClsModule,
+        MikroOrmModule.configure({
+          driver: BetterSqliteDriver,
+          dbName: join(tmp, "cd-default.sqlite"),
+          entities: FIXTURE_ENTITIES,
+          migrations: { path: join(tmp, "cd-default") },
+        }),
+        MikroOrmModule.configure({
+          name: "analytics",
+          driver: BetterSqliteDriver,
+          dbName: join(tmp, "cd-analytics.sqlite"),
+          entities: FIXTURE_ENTITIES,
+          migrations: { path: join(tmp, "cd-analytics") },
+        }),
+      ],
+    })
+    class AppModule {}
+
+    await runMigrations(
+      AppModule,
+      ["migration:create", "--connection", "analytics"],
+      { logger: silentLogger }
+    );
+
+    const dir = (p: string) => (existsSync(p) ? readdirSync(p) : []);
+    // The analytics folder got a migration; the default folder is untouched.
+    expect(
+      dir(join(tmp, "cd-analytics")).some((f) =>
+        /Migration.*\.(ts|js)$/.test(f)
+      )
+    ).toBe(true);
+    expect(
+      dir(join(tmp, "cd-default")).some((f) => /Migration.*\.(ts|js)$/.test(f))
+    ).toBe(false);
   });
 });

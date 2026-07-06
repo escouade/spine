@@ -570,8 +570,16 @@ NODE_ENV=development spine-migrate migration:fresh --force-drop --module ./dist/
 
 It refuses (before touching the database) unless **all** hold: `NODE_ENV` is explicitly `development` or
 `test`; the orthogonal `--force-drop` flag is present (the env label alone never authorizes a drop); and
-the target connection does **not** share a physical database with another configured connection (a drop
-can't be proven to target a distinct database). Each refusal names the next step.
+the target connection does **not** share a physical database with another **migration** connection (a
+drop can't be proven to target a distinct database). Each refusal names the next step.
+
+:::note What `fresh` drops
+`fresh` drops the tables in your **current entity model** (plus the migrations tracking table), then
+re-applies. A table an old migration created for an entity you later removed is **not** dropped — if
+that migration is replayed it will then fail "already exists"; drop such orphan tables by hand. The
+shared-database refusal also only knows about other connections that declare `migrations`, so you still
+own confirming your DSN before a reset.
+:::
 
 ### Auto-migrate at start (`migrateOnStart`)
 

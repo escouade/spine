@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { App, Module } from "@spinejs/core";
 import type { Logger, ModuleEntry } from "@spinejs/core";
-import { MikroORM, type Options } from "@mikro-orm/core";
+import { MikroORM, EntitySchema, type Options } from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { Migration } from "@mikro-orm/migrations";
 import { ClsModule } from "@spinejs/cls";
 import { MikroOrmModule } from "./index";
+import { mikroOrmRef } from "./mikro-orm.options";
 import { resetMigrationRegistry } from "./mikro-orm.migrations-registry";
 import { FIXTURE_ENTITIES } from "./migration-harness";
 
@@ -32,6 +33,34 @@ class CreateUsers extends Migration {
 const LIST: MigrationsList = [
   { name: "Migration001_users", class: CreateUsers },
 ];
+
+// A minimal single-entity fixture whose table a migration creates exactly — so once that migration is
+// applied there is NO entity-vs-DB drift, which lets the gate-isolation test below distinguish
+// `getPendingMigrations()` from `checkMigrationNeeded()`. (MikroORM rejects an empty `entities`.)
+class Thing {
+  id!: number;
+}
+const ThingSchema = new EntitySchema<Thing>({
+  class: Thing,
+  properties: { id: { type: "number", primary: true } },
+});
+class CreateThing extends Migration {
+  override async up(): Promise<void> {
+    this.addSql("create table thing (id integer not null primary key);");
+  }
+  override async down(): Promise<void> {
+    this.addSql("drop table thing;");
+  }
+}
+class SeedThing extends Migration {
+  override async up(): Promise<void> {
+    // Data-only — produces NO entity-schema drift, so checkMigrationNeeded() stays false.
+    this.addSql("insert into thing (id) values (1);");
+  }
+  override async down(): Promise<void> {
+    this.addSql("delete from thing where id = 1;");
+  }
+}
 
 const makeLogger = () => {
   const warn = vi.fn();
@@ -172,6 +201,105 @@ describe("migrateOnStart", () => {
 
     await app.start(); // onStart runs migrateOnStart
     expect(await wasApplied()).toBe(true);
+    await app.stop();
+  });
+
+  it("applies a pending migration with NO entity-schema drift (gates on getPendingMigrations, not checkMigrationNeeded)", async () => {
+    vi.stubEnv("NODE_ENV", "test");
+    const dbFile = join(tmp, "nodrift.sqlite");
+    const cap: { orm?: MikroORM } = {};
+    const buildApp = (list: MigrationsList) => {
+      cap.orm = undefined;
+      @Module({ imports: [MikroOrmModule], inject: [MikroORM] })
+      class Probe {
+        constructor(orm: MikroORM) {
+          cap.orm = orm;
+        }
+      }
+      @Module({
+        imports: [
+          ClsModule,
+          MikroOrmModule.configure({
+            driver: BetterSqliteDriver,
+            dbName: dbFile,
+            entities: [ThingSchema],
+            migrations: {
+              path: join(tmp, "m-nodrift"),
+              migrationsList: list,
+              migrateOnStart: true,
+            },
+          }),
+          Probe,
+        ],
+      })
+      class AppModule {}
+      return AppModule;
+    };
+
+    // Boot 1: apply the schema migration → `thing` now matches the entity, so there is NO drift.
+    const app1 = new App(
+      [buildApp([{ name: "M1_create", class: CreateThing }])],
+      {
+        logger: makeLogger().log,
+        handleProcessExit: false,
+      }
+    );
+    await app1.init();
+    await app1.start();
+    await app1.stop();
+
+    // Boot 2: a data-only migration is now pending. checkMigrationNeeded() is FALSE (schema matches the
+    // entity), but the migration IS pending — migrateOnStart must apply it (getPendingMigrations gate).
+    const app2 = new App(
+      [
+        buildApp([
+          { name: "M1_create", class: CreateThing },
+          { name: "M2_seed", class: SeedThing },
+        ]),
+      ],
+      { logger: makeLogger().log, handleProcessExit: false }
+    );
+    await app2.init();
+    await app2.start();
+
+    const executed = await cap.orm!.getMigrator().getExecutedMigrations();
+    expect(executed.map((e) => e.name)).toContain("M2_seed");
+    await app2.stop();
+  });
+
+  it("applies migrateOnStart on a NAMED connection too (not just the default)", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    // configure({ name }) returns the memoized connection node — reuse the SAME object for the Probe.
+    const analyticsConn = MikroOrmModule.configure({
+      name: "analytics",
+      driver: BetterSqliteDriver,
+      dbName: join(tmp, "named.sqlite"),
+      entities: [ThingSchema],
+      migrations: {
+        path: join(tmp, "m-named"),
+        migrationsList: [{ name: "NamedMig", class: CreateThing }],
+        migrateOnStart: true,
+      },
+    });
+    const cap: { orm?: MikroORM } = {};
+    @Module({ imports: [analyticsConn], inject: [mikroOrmRef("analytics")] })
+    class Probe {
+      constructor(orm: MikroORM) {
+        cap.orm = orm;
+      }
+    }
+    @Module({ imports: [ClsModule, analyticsConn, Probe] })
+    class AppModule {}
+
+    const app = new App([AppModule], {
+      logger: makeLogger().log,
+      handleProcessExit: false,
+    });
+    await app.init();
+    await app.start();
+
+    const executed = await cap.orm!.getMigrator().getExecutedMigrations();
+    expect(executed.map((e) => e.name)).toContain("NamedMig");
     await app.stop();
   });
 });

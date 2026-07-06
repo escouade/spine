@@ -179,11 +179,16 @@ export async function connectWithRetry(
  * connection's `onStart` **after** it connects — never from the headless CLI path (`runMigrations`
  * calls `init()` only, so `onStart` never fires there; the two paths are never conflated).
  *
- * Fail-closed and defense-in-depth: it does nothing unless `migrateOnStart` was opted in **and**
- * `NODE_ENV` is explicitly `development`/`test` (a production/unknown/unset env is refused with a
- * warning — the app still boots, it just never auto-migrates). Even then it applies only after
- * `checkMigrationNeeded()` reports drift, so a current schema is a no-op. There is no advisory lock, so
- * this must never run where replicas could race (documented).
+ * Fail-closed and defense-in-depth on the environment: it does nothing unless `migrateOnStart` was
+ * opted in **and** `NODE_ENV` is explicitly `development`/`test`. In a production/unknown/unset env it
+ * **warns and skips** — the app still boots, it just never auto-migrates. In dev/test it applies the
+ * **pending migrations** (a no-op when none are pending), and a migration **failure propagates** out of
+ * `onStart` so the boot fails loudly and you fix it — the opposite of the silent production skip. There
+ * is no advisory lock, so this must never run where replicas could race (documented).
+ *
+ * The gate is `getPendingMigrations()` — the direct "are there migrations to apply" question — **not**
+ * `checkMigrationNeeded()`, which is an entity-vs-DB schema diff (it would silently skip a pending
+ * migration that produces no structural drift, e.g. a data backfill or an index-only migration).
  */
 async function maybeMigrateOnStart(
   orm: MikroORM,
@@ -204,9 +209,9 @@ async function maybeMigrateOnStart(
     return;
   }
   const migrator = orm.getMigrator();
-  if (!(await migrator.checkMigrationNeeded())) {
+  if ((await migrator.getPendingMigrations()).length === 0) {
     log.debug(
-      `migrateOnStart: connection "${connectionName}" schema is current; nothing to apply.`,
+      `migrateOnStart: connection "${connectionName}" has no pending migrations; nothing to apply.`,
       CONTEXT
     );
     return;
