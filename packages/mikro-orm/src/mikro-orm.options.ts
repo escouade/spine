@@ -120,13 +120,21 @@ export const DEFAULT_RETRY: RetryPolicy = {
 };
 
 /**
- * The `migrations` options a developer may declare on a connection — a curated view of MikroORM's own
- * `Options["migrations"]` (path, tableName, snapshot, transactional, allOrNothing, emit,
- * disableForeignKeys, …). Declaring it opts the connection into schema migrations (the Migrator
- * extension is wired on that connection's `MikroORM`); omitting it leaves the connection byte-for-byte
- * unchanged and pulls in no migrations dependency.
+ * The `migrations` options a developer may declare on a connection — MikroORM's own `Options["migrations"]`
+ * (path, tableName, snapshot, transactional, allOrNothing, emit, disableForeignKeys, …) plus the Spine-only
+ * `migrateOnStart`. Declaring the block opts the connection into schema migrations (the Migrator extension
+ * is wired on that connection's `MikroORM`); omitting it leaves the connection byte-for-byte unchanged and
+ * pulls in no migrations dependency.
  */
-export type MigrationsOptions = NonNullable<Options["migrations"]>;
+export type MigrationsOptions = NonNullable<Options["migrations"]> & {
+  /**
+   * Spine-only (stripped before it reaches MikroORM): apply pending migrations automatically at app
+   * **start**, guarded — only after a `checkMigrationNeeded()` drift check and only when `NODE_ENV` is
+   * explicitly `development`/`test`. Default **off**. There is no advisory lock, so never enable it where
+   * replicas could race the same database (FR-8, NFR-2, AD-8).
+   */
+  migrateOnStart?: boolean;
+};
 
 /**
  * Spine-opinionated migration defaults (FR-2): entity-first, safe-by-default. TypeScript migration
@@ -157,7 +165,7 @@ export const SPINE_MIGRATION_DEFAULTS = {
  * wins.
  */
 export const resolveMigrationsOptions = (
-  migrations: Options["migrations"],
+  migrations: MigrationsOptions | undefined,
   connectionName: string = DEFAULT_CONNECTION
 ): Options["migrations"] => {
   if (migrations === undefined) return undefined;
@@ -170,12 +178,15 @@ export const resolveMigrationsOptions = (
     ...SPINE_MIGRATION_DEFAULTS,
     ...explicit,
   };
-  // Namespace a named connection's folder when it gave no (or an empty) explicit path — `!merged.path`
-  // also catches `""`, which would otherwise resolve to the process cwd rather than a per-name folder.
-  if (connectionName !== DEFAULT_CONNECTION && !merged.path) {
-    return { ...merged, path: `./migrations/${connectionName}` };
+  // `migrateOnStart` is Spine-only — strip it so MikroORM never sees an unknown key (configure() reads
+  // it separately for the module's onStart).
+  const { migrateOnStart: _migrateOnStart, ...mikroMigrations } = merged;
+  // Namespace a named connection's folder when it gave no (or an empty) explicit path — `!path` also
+  // catches `""`, which would otherwise resolve to the process cwd rather than a per-name folder.
+  if (connectionName !== DEFAULT_CONNECTION && !mikroMigrations.path) {
+    return { ...mikroMigrations, path: `./migrations/${connectionName}` };
   }
-  return merged;
+  return mikroMigrations;
 };
 
 /**
@@ -190,10 +201,12 @@ export const resolveMigrationsOptions = (
  *   connection. Off by default: a second dirty connection throws (cross-DB writes have no atomicity).
  *   Opting in gives **best-effort sequential** flush — a mid-sequence failure strands earlier commits.
  *
- * The inherited `migrations` field (see {@link MigrationsOptions}) opts the connection into schema
- * migrations; {@link SPINE_MIGRATION_DEFAULTS} are applied to it at configure time.
+ * The `migrations` field (see {@link MigrationsOptions}) opts the connection into schema migrations;
+ * {@link SPINE_MIGRATION_DEFAULTS} are applied to it at configure time. It overrides MikroORM's own
+ * `migrations` type to add the Spine-only `migrateOnStart`.
  */
-export type MikroOrmModuleOptions = Options & {
+export type MikroOrmModuleOptions = Omit<Options, "migrations"> & {
+  migrations?: MigrationsOptions;
   retry?: Partial<RetryPolicy>;
   name?: string;
   multiWrite?: boolean;
@@ -202,6 +215,15 @@ export type MikroOrmModuleOptions = Options & {
 /** Value token carrying the MikroORM options (retry stripped) to the `MikroORM` factory. */
 export const mikroOrmOptionsToken = new InjectionToken<Options>(
   "mikro-orm.options"
+);
+
+/**
+ * Value token carrying whether the default connection applies pending migrations at boot (the Spine-only
+ * `migrations.migrateOnStart`, stripped from the MikroORM options). Read by the module's `onStart`;
+ * `false` when unset or when no migrations are configured.
+ */
+export const migrateOnStartToken = new InjectionToken<boolean>(
+  "mikro-orm.migrate-on-start"
 );
 
 /** Value token carrying the resolved (defaults-merged) retry policy to the module's `onStart`. */
