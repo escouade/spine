@@ -337,14 +337,63 @@ describe("buildOpenApiDocument", () => {
     expect(build()).toEqual(build());
   });
 
-  it("skips SSE routes (documented in Story 1.6)", () => {
+  it("documents an SSE route as a text/event-stream GET, un-enveloped (AD-15)", () => {
     @Controller({})
     class StreamController {
       stream = sse("/stream", {}, async function* () {});
       plain = get("/plain", {}, () => ({ ok: true }));
     }
     const doc = docFromController(new StreamController());
-    expect(Object.keys(doc.paths)).toEqual(["/plain"]);
+    // No longer skipped — the SSE route is documented alongside the plain one.
+    expect(Object.keys(doc.paths)).toEqual(["/plain", "/stream"]);
+    const op = (doc.paths as Record<string, Record<string, Op>>)["/stream"].get;
+    // GET, text/event-stream success, no application/json, no request body, no envelope.
+    expect(op.requestBody).toBeUndefined();
+    expect(op.responses).toEqual({
+      "200": {
+        description: "Server-sent event stream",
+        content: { "text/event-stream": { schema: { type: "string" } } },
+      },
+    });
+    // SSE never synthesizes a response envelope component.
+    expect(components(doc).GetStream_ResponseEnvelope).toBeUndefined();
+  });
+
+  it("maps an SSE route's query into parameters (FR-B1, AC #2)", () => {
+    const op = paths(build())["/stream"].get;
+    expect(op.parameters).toEqual([
+      {
+        name: "since",
+        in: "query",
+        required: false,
+        schema: { type: "string" },
+      },
+    ]);
+  });
+
+  it("declares static headers on an SSE response (AD-15)", () => {
+    @Controller({})
+    class HeadedStream {
+      stream = sse(
+        "/hs",
+        { headers: { "X-Stream": "1" } },
+        async function* () {}
+      );
+    }
+    const doc = docFromController(new HeadedStream());
+    const op = (doc.paths as Record<string, Record<string, Op>>)["/hs"].get;
+    const ok = (op.responses as Record<string, Op>)["200"];
+    expect(ok.headers).toEqual({ "X-Stream": { schema: { const: "1" } } });
+    expect(
+      (ok.content as Record<string, Op>)["text/event-stream"]
+    ).toBeDefined();
+  });
+
+  it("leaves normal (non-SSE) routes enveloped as application/json (AC #3)", () => {
+    const ok = (paths(build())["/health"].get.responses as Record<string, Op>)[
+      "200"
+    ];
+    expect(Object.keys(ok.content as object)).toEqual(["application/json"]);
   });
 
   it("does not surface author-provided examples at operation level", () => {

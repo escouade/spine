@@ -12,6 +12,7 @@ import {
   del,
   get,
   post,
+  sse,
 } from "@spinejs/http-gateway";
 import type {
   HttpBaseContext,
@@ -21,8 +22,8 @@ import type {
 
 /**
  * Shared example-app fixture for the builder stories (1.3–1.7). Each builder story adds the routes it
- * needs and its own assertions; Story 1.8 golden-file-locks the whole thing. Kept SSE-free until
- * Story 1.6 introduces the SSE branch. Schemas are authored with `zod/v4` (the converter's flavor).
+ * needs and its own assertions; Story 1.8 golden-file-locks the whole thing. Includes an SSE route
+ * since Story 1.6 (documented as a `text/event-stream` GET, AD-15). Schemas use `zod/v4`.
  */
 
 @Controller({})
@@ -159,6 +160,17 @@ class ReportsController {
   );
 }
 
+@Controller({})
+class StreamController {
+  // SSE route (AD-15): documented as a GET `text/event-stream`, un-enveloped; `query` still maps as
+  // a parameter. The empty async generator satisfies `AsyncIterable<SseEvent>`.
+  stream = sse(
+    "/stream",
+    { query: z.object({ since: z.string().optional() }) },
+    async function* () {}
+  );
+}
+
 const contextFactory = {
   create: (honoCtx: HttpRaw): HttpBaseContext => ({ honoCtx }),
 };
@@ -180,5 +192,6 @@ export function fixtureRoutes(): readonly HttpRoute[] {
   gateway.register(getRoutes(new HiddenController(), noGuards) as HttpRoute[]);
   gateway.register(getRoutes(new CatalogController(), noGuards) as HttpRoute[]);
   gateway.register(getRoutes(new ReportsController(), noGuards) as HttpRoute[]);
+  gateway.register(getRoutes(new StreamController(), noGuards) as HttpRoute[]);
   return gateway.routes;
 }

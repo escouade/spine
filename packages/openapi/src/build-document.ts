@@ -54,7 +54,6 @@ export function buildOpenApiDocument(
   const byPath = new Map<string, Map<HttpMethod, HttpRoute>>();
   for (const route of routes) {
     const meta = route.meta as HttpRouteMeta | undefined;
-    if (meta?.sse) continue; // SSE → Story 1.6
     if (meta?.hidden) continue; // hidden route (AD-13)
     if (excluded.has(route.address.path)) continue; // module exclude list (AD-13)
 
@@ -126,6 +125,13 @@ function buildOperation(
   );
   if (parameters.length > 0) op.parameters = parameters;
 
+  if (meta.sse) {
+    // SSE routes are un-enveloped event streams (AD-15): a GET with a `text/event-stream` success
+    // response, no request body, no `{ ok, data }` envelope. Params/query still map above.
+    op.responses = buildSseResponse(meta);
+    return op;
+  }
+
   if (inputs.body) {
     const ref = registerSchemaComponent(
       converter.toJsonSchema(inputs.body, { io: "input" }),
@@ -141,6 +147,20 @@ function buildOperation(
   op.responses = buildResponses(meta, converter, registry, operationId);
 
   return op;
+}
+
+/**
+ * Build the responses for an SSE route (AD-15): a single `200` whose body is `text/event-stream` (never
+ * `application/json`, never envelope-wrapped). Static `headers` are declared like any success response.
+ */
+function buildSseResponse(meta: HttpRouteMeta): JsonValue {
+  const response: { [key: string]: JsonValue } = {
+    description: "Server-sent event stream",
+  };
+  if (meta.headers !== undefined)
+    response.headers = buildResponseHeaders(meta.headers);
+  response.content = { "text/event-stream": { schema: { type: "string" } } };
+  return { "200": response };
 }
 
 /**
