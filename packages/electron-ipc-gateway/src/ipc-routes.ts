@@ -11,11 +11,28 @@ import type { ElectronIpcBaseContext } from "./electron-ipc-base.types";
  * carries a single payload, so there is one `input` schema. `response` is reserved for future schema
  * export — carried in the marker's `meta`, never validated. `guards` are per-route guard classes
  * (merged after the controller's class-level `@UseGuards`).
+ *
+ * The interface is intentionally open: a battery may add a documented, namespaced option through a
+ * `declare module "@spinejs/electron-ipc-gateway"` augmentation (e.g. `throttle`, shipped by
+ * `@spinejs/throttle/electron-ipc`). The transport copies such fields verbatim onto the marker's
+ * `meta` (see {@link IpcRouteMeta}) and never interprets them — full parity with the HTTP verb
+ * helpers (AD-3).
  */
 export interface IpcRouteSchemas<I> {
   input?: ParseableSchema<I>;
   response?: ParseableSchema<unknown>;
   guards?: GuardConstructor[];
+}
+
+/**
+ * Opaque per-transport extras carried on an IPC marker's `meta` (never interpreted by the core): the
+ * single `input` schema plus the `response` schema (reserved for future schema export). A battery may
+ * own a documented, namespaced key here via augmentation (e.g. `throttle`) — the transport copies it
+ * blindly, only that battery's interceptor reads it.
+ */
+export interface IpcRouteMeta {
+  input?: ParseableSchema<unknown>;
+  response?: ParseableSchema<unknown>;
 }
 
 /**
@@ -71,6 +88,11 @@ export interface IpcRouteHelpers<Ctx extends ElectronIpcBaseContext> {
   handle: IpcRouteHelper<Ctx>;
 }
 
+/** True for a non-null, non-array object literal (the only shape a battery `meta` namespace accepts). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Shared runtime builder: assembles the IPC marker from `channel` + schemas + callback. */
 function buildMarker<
   Ctx extends ElectronIpcBaseContext,
@@ -81,12 +103,40 @@ function buildMarker<
   schemas: S,
   fn: (input: IpcInputOf<S>, ctx: Ctx) => Out
 ): RouteMarker<Ctx, string> {
+  const meta: IpcRouteMeta = {
+    input: schemas.input,
+    response: schemas.response,
+  };
+  // Namespaced battery meta (AD-3) — full parity with the HTTP verb helpers: the user's `throttle`
+  // option fields are copied VERBATIM under `meta.throttle` with exactly one stamped field added —
+  // `routeId` = the channel string. The transport never interprets the fields (opaque copy);
+  // `throttle: false` is encoded as `disabled: true`. The option itself is typed only by
+  // `@spinejs/throttle`'s `declare module` augmentation — without the battery, `throttle:` is an
+  // unknown property. Guard the plain-JS misuse the augmentation can't (`throttle: true` / a string
+  // would spread to nothing and silently run with defaults): only an options object or `false` is valid.
+  const throttleOption = (schemas as { throttle?: unknown }).throttle;
+  if (
+    throttleOption !== undefined &&
+    throttleOption !== false &&
+    !isPlainObject(throttleOption)
+  ) {
+    throw new Error(
+      `IPC channel "${channel}": \`throttle\` must be a throttle options object or \`false\` ` +
+        `(got ${
+          Array.isArray(throttleOption) ? "an array" : typeof throttleOption
+        }).`
+    );
+  }
+  (meta as { throttle?: unknown }).throttle = {
+    ...(throttleOption === false ? { disabled: true } : throttleOption),
+    routeId: channel,
+  };
   return makeRouteMarker<Ctx, string, IpcInputOf<S>>({
     address: channel,
     input: schemas.input,
     fn,
     guards: schemas.guards,
-    meta: { input: schemas.input, response: schemas.response },
+    meta,
   });
 }
 

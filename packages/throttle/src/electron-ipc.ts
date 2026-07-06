@@ -2,7 +2,32 @@
 // Optional peer: `@spinejs/electron-ipc-gateway` (type-only import — no runtime `electron` load).
 import type { ElectronIpcBaseContext } from "@spinejs/electron-ipc-gateway";
 import type { GatewayContext } from "@spinejs/gateway-core";
+import type { ThrottleRouteMeta, ThrottleRouteOption } from "./engine";
 import type { KeySelector } from "./throttle.types";
+
+/**
+ * Route-option typing for electron IPC apps (AD-3): importing anything from
+ * `@spinejs/throttle/electron-ipc` makes `throttle` a fully-typed option of the `handle()` helper —
+ * full parity with the HTTP verb helpers. Without the battery, writing `throttle:` in `handle()`
+ * options is a TS error (unknown property) — the transport carries no battery vocabulary.
+ */
+declare module "@spinejs/electron-ipc-gateway" {
+  // The type parameter must repeat the target interface's list verbatim for declaration merging.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  interface IpcRouteSchemas<I> {
+    /**
+     * Rate-limit policy for this channel: inline `policies` (scoped `routeId#index`,
+     * non-overridable), `skip` named gateway defaults, `override` them per-channel — or `false` to
+     * opt out of every default. Enforced by `@spinejs/throttle`'s interceptor.
+     */
+    throttle?: ThrottleRouteOption | false;
+  }
+
+  interface IpcRouteMeta {
+    /** The stamped `meta.throttle` copy (user fields verbatim + `routeId` = the channel) — see AD-3. */
+    throttle?: ThrottleRouteMeta;
+  }
+}
 
 /**
  * The `'sender'` key source (FR-5): keys an IPC call by the renderer that sent it

@@ -18,5 +18,6 @@ export type {
   IpcRouteHelpers,
   IpcRouteHelper,
   IpcRouteSchemas,
+  IpcRouteMeta,
   IpcInputOf,
 } from "./ipc-routes";
