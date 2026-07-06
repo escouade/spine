@@ -149,3 +149,71 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
     expect(after).toBeGreaterThanOrEqual(before);
   });
 });
+
+describe("per-policy bounds, LRU and introspection (AD-5, Story 1.5)", () => {
+  const bounded = (id: string, maxKeys: number): StorePolicy =>
+    policy({ id, maxKeys });
+
+  it("evicts the least-recently-used key beyond the policy's max-keys bound", async () => {
+    const clock = new FakeClock();
+    const store = makeStore(clock);
+    const p = bounded("A", 2);
+
+    await store.consume("a", p);
+    await store.consume("b", p);
+    await store.consume("a", p); // touch: 'a' becomes most-recent, 'b' is now LRU
+    await store.consume("c", p); // over bound → evicts 'b', not 'a'
+
+    expect(store.stats().A).toEqual({ size: 2, evictions: 1 });
+    // 'a' kept its counter (2 hits + the next one = at limit 3)…
+    expect((await store.consume("a", p)).totalHits).toBe(3);
+    // …while 'b' restarts a fresh window (its state was evicted).
+    expect((await store.consume("b", p)).totalHits).toBe(1);
+    expect(store.stats().A.evictions).toBe(2); // 'b' re-entering evicted the LRU again
+  });
+
+  it("never evicts across policy spaces: flooding A leaves B's counters untouched", async () => {
+    const clock = new FakeClock();
+    const store = makeStore(clock);
+    const a = bounded("A", 3);
+    const b = bounded("B", 3);
+
+    // Policy B tracks a victim key up to its limit.
+    for (let i = 0; i < 3; i++) await store.consume("victim", b);
+    expect((await store.consume("victim", b)).totalHits).toBe(3); // at limit
+
+    // Flood policy A's space far past its bound.
+    for (let i = 0; i < 50; i++) await store.consume(`attacker-${i}`, a);
+
+    // Only A evicted; B's counter survived — the victim is STILL at limit (no reset-by-flood).
+    expect(store.stats().A.size).toBe(3);
+    expect(store.stats().A.evictions).toBe(47);
+    expect(store.stats().B).toEqual({ size: 1, evictions: 0 });
+    expect((await store.consume("victim", b)).totalHits).toBe(3); // still rejected
+  });
+
+  it("reports { size, evictions } per policy space at any time", async () => {
+    const clock = new FakeClock();
+    const store = makeStore(clock);
+    expect(store.stats()).toEqual({});
+
+    await store.consume("x", policy({ id: "P1" }));
+    await store.consume("y", policy({ id: "P1" }));
+    await store.consume("x", policy({ id: "P2" }));
+
+    expect(store.stats()).toEqual({
+      P1: { size: 2, evictions: 0 },
+      P2: { size: 1, evictions: 0 },
+    });
+  });
+
+  it("falls back to the store-level maxKeysPerPolicy default", async () => {
+    const clock = new FakeClock();
+    const store = new InMemoryThrottleStore({ clock, maxKeysPerPolicy: 1 });
+    stores.push(store);
+
+    await store.consume("a", policy());
+    await store.consume("b", policy());
+    expect(store.stats().p).toEqual({ size: 1, evictions: 1 });
+  });
+});
