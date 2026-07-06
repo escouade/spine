@@ -4,6 +4,7 @@ import { AppOptions } from "./types";
 import { AppLogger } from "./logger";
 import { Container, InjectionToken } from "./container";
 import { ModuleEntry, ModuleLoader, hasOnStart, hasOnStop } from "./module";
+import { loadedCoreCopies } from "./core-copies";
 
 export const appToken = new InjectionToken<App>("global.app");
 export const loggerToken = new InjectionToken<Logger>("global.logger");
@@ -43,6 +44,8 @@ export class App {
     }
 
     this.logger.info("⏳ Application initialization...", App.name);
+
+    this.warnOnDuplicateCoreCopies();
 
     this.shutdownTimeout = options?.shutdownTimeout ?? 5_000;
 
@@ -159,6 +162,29 @@ export class App {
     if (hardKill) clearTimeout(hardKill);
 
     process.exit(code);
+  }
+
+  /**
+   * Boot diagnostic for the duplicate-core failure mode: with several evaluated
+   * copies of `@spinejs/core` in the process, token Symbols differ per copy and
+   * cross-copy provider resolutions come back `undefined` with no hint of why.
+   * Warn (not throw): a duplicated process can still work when the copies never
+   * exchange providers, and the warning names the cause before the first
+   * `undefined` surfaces.
+   */
+  private warnOnDuplicateCoreCopies(): void {
+    const copies = loadedCoreCopies();
+    if (copies > 1) {
+      this.logger.warn(
+        `⚠️ ${copies} copies of @spinejs/core are loaded in this process. ` +
+          "Injection tokens rely on Symbol identity, so providers registered " +
+          "through one copy resolve to undefined through another. Usual causes: " +
+          "a duplicated install in node_modules (check `npm ls @spinejs/core` " +
+          "or `yarn why @spinejs/core`, align your @spinejs/* version ranges, " +
+          "then dedupe the lockfile), or the same install loaded both as ESM and CJS.",
+        App.name
+      );
+    }
   }
 
   private exitHandler(): Promise<void> | void {
