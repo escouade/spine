@@ -363,7 +363,13 @@ export class MikroOrmModule implements OnStart, OnStop {
       };
       // Fail closed at configure time if this connection's migrations would collide with another's
       // (shared path, or shared physical DB + tracking table); warn on a shared physical DB (AD-6).
-      registerMigrationConnection(connectionName, resolvedOrmOptions);
+      // Also records the resolved retry so the migration CLI connects with the same policy (not a
+      // hardcoded default).
+      registerMigrationConnection(
+        connectionName,
+        resolvedOrmOptions,
+        resolvedRetry
+      );
     }
 
     // Named connection: its own `fresh` node (memoized by name), tokens, lifecycle + retry, interceptor.

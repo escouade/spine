@@ -505,8 +505,8 @@ spine-migrate migration:down    --module ./dist/app.module.js#AppModule
 ```
 
 `--module <path>#<Export>` indique à la CLI où se trouve votre `AppModule` ; `#<Export>` est optionnel (il
-retombe sur l'export par défaut, puis un export nommé `AppModule`). Le code de sortie est `0` en cas de
-succès et non nul en cas d'échec, donc une migration qui échoue fait échouer votre build CI.
+retombe sur un export nommé `AppModule`, puis sur l'export par défaut). Le code de sortie est `0` en cas
+de succès et non nul en cas d'échec, donc une migration qui échoue fait échouer votre build CI.
 
 :::note Lancer des migrations TypeScript
 Le défaut `emit: "ts"` écrit des migrations TypeScript, et Node ne peut pas exécuter du `.ts`
@@ -764,7 +764,7 @@ optionnelle** : requise uniquement quand une connexion déclare `migrations`.
 
 | Flag                  | Signification                                                                                          |
 | --------------------- | ------------------------------------------------------------------------------------------------------ |
-| `--module <path>#<E>` | Où se trouve l'`AppModule` ; `#<E>` retombe sur l'export par défaut, puis `AppModule`.                 |
+| `--module <path>#<E>` | Où se trouve l'`AppModule` ; `#<E>` retombe sur un export nommé `AppModule`, puis le défaut.           |
 | `--connection <name>` | Cible une connexion nommée ; sans lui, la connexion par défaut. Inconnue → erreur listant les connues. |
 | `--to <version>`      | Migre `up`/`down` jusqu'à une version précise plutôt que dernière / un cran.                           |
 | `--blank`             | `create` une migration vide à écrire à la main.                                                        |

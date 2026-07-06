@@ -16,5 +16,7 @@ _bmad-output/
 # yarn pack output (release publish loop)
 *.tgz
 
-# Story 2.7 in-project throwaway migration dirs (executable migrations need node_modules resolution)
-packages/*/spine-verb-migrations-*/
+# Story 2.7 in-project throwaway migration dirs (executable migrations need node_modules resolution).
+# Match at any depth: nx runs vitest with cwd=packages/mikro-orm, but a root-level `vitest` run would
+# create the dir at the repo root.
+spine-verb-migrations-*/

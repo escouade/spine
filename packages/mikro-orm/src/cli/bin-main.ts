@@ -17,8 +17,14 @@ export interface CliDeps {
 /**
  * Resolve the user's `AppModule` from a `--module <path>#<Export>` spec — the convenience launcher over
  * the stable `runMigrations(AppModule, argv)` contract (AD-5). The `#<Export>` is optional: it defaults
- * to the module's `default` export, then a `AppModule` named export, then a sole export; an ambiguous
- * module (several exports, no `#Export`) fails with an actionable message.
+ * to a `AppModule` named export, then the `default` export, then a sole export; an ambiguous module
+ * (several exports, no `#Export`) fails with an actionable message.
+ *
+ * `AppModule` is tried **before** `default` on purpose: a TypeScript app compiled to **CommonJS** and
+ * loaded via `import()` exposes `mod.default` as the whole `module.exports` wrapper object (always
+ * defined) — picking it would hand `App` a plain object, not the module class. The named export is the
+ * class in both the ESM and CJS builds, so it is the reliable pick; ESM apps that only `export default`
+ * still fall through to it.
  */
 export async function loadAppModule(spec: string): Promise<ModuleEntry> {
   const hashIdx = spec.lastIndexOf("#");
@@ -44,13 +50,15 @@ function pickExport(
     }
     return mod[exportName];
   }
-  if (mod.default !== undefined) return mod.default;
   if (mod.AppModule !== undefined) return mod.AppModule;
+  if (mod.default !== undefined) return mod.default;
   const keys = Object.keys(mod).filter((k) => k !== "__esModule");
   if (keys.length === 1) return mod[keys[0]];
   throw new Error(
-    `@spinejs/mikro-orm: "${spec}" exports several members — name the AppModule with ` +
-      `"<path>#<Export>" (found: ${keys.join(", ") || "none"}).`
+    keys.length === 0
+      ? `@spinejs/mikro-orm: module "${spec}" has no usable exports — export your AppModule (e.g. \`export class AppModule {}\`) and point at it with "<path>#<Export>".`
+      : `@spinejs/mikro-orm: "${spec}" exports several members — name the AppModule with ` +
+        `"<path>#<Export>" (found: ${keys.join(", ")}).`
   );
 }
 

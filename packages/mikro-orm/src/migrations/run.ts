@@ -10,6 +10,12 @@ export interface VersionFlags {
   to?: string;
 }
 
+// `--to` arrives as a string, but MikroORM/umzug special-case the **number** `0` as "revert everything"
+// (`down --to 0`) — a strict `=== 0` check that the string `"0"` fails, yielding an opaque "couldn't
+// find migration 0". Coerce the one magic value back to a number; every other version stays a name.
+const targetOf = (to: string | undefined): string | number | undefined =>
+  to === "0" ? 0 : to;
+
 /**
  * Pure-function `up` handler (AD-5, AD-10): applies **only** pending migrations, in order, recording
  * each in the tracking table. A second run with nothing pending is a no-op (returns `[]`). Batch
@@ -21,7 +27,8 @@ export async function up(
   migrator: IMigrator,
   flags: VersionFlags = {}
 ): Promise<UmzugMigration[]> {
-  return migrator.up(flags.to ? { to: flags.to } : undefined);
+  const to = targetOf(flags.to);
+  return migrator.up(to !== undefined ? { to } : undefined);
 }
 
 /**
@@ -33,7 +40,8 @@ export async function down(
   migrator: IMigrator,
   flags: VersionFlags = {}
 ): Promise<UmzugMigration[]> {
-  return migrator.down(flags.to ? { to: flags.to } : undefined);
+  const to = targetOf(flags.to);
+  return migrator.down(to !== undefined ? { to } : undefined);
 }
 
 /**

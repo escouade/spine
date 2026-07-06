@@ -49,6 +49,14 @@ class ProbeMigration extends Migration {
   }
 }
 
+// A migration whose SQL fails at execution — to prove a verb failure inside onInit rejects runMigrations.
+class FailingMigration extends Migration {
+  override async up(): Promise<void> {
+    this.addSql("this is not valid sql;");
+  }
+  override async down(): Promise<void> {}
+}
+
 let tmp: string;
 beforeEach(() => {
   resetMigrationRegistry();
@@ -199,11 +207,23 @@ describe("runMigrations (headless composition-root)", () => {
     );
   });
 
-  it("rejects (never process.exit) when the verb fails", async () => {
+  it("rejects (never process.exit) when a verb fails inside onInit", async () => {
+    const { AppModule } = makeAppModule({
+      migrationsList: [{ name: "Migration001_bad", class: FailingMigration }],
+    });
+
+    // The verb runs in the command module's onInit; a failure there must surface as a rejected promise
+    // (the process stays alive — only bin.ts maps a rejection to an exit code).
+    await expect(
+      runMigrations(AppModule, ["migration:up"], { logger: silentLogger })
+    ).rejects.toThrow();
+  });
+
+  it("refuses migration:fresh early, before composing, with an Epic 3 message", async () => {
     const { AppModule } = makeAppModule({});
 
-    // `fresh` parses but is not available until Epic 3 — its handler throws, which must surface as a
-    // rejected promise (the process stays alive; only bin.ts maps a rejection to an exit code).
+    // `fresh` parses (grammar defined from Story 2.3) but its guarded handler lands in Epic 3. It is
+    // rejected before the app is composed, so an unreachable DB never masks it with a connect error.
     await expect(
       runMigrations(AppModule, ["migration:fresh"], { logger: silentLogger })
     ).rejects.toThrow(/migration:fresh.*Epic 3/);
