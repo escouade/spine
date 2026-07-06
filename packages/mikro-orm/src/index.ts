@@ -32,7 +32,7 @@ export type {
 
 // Pure-function migration handlers — the leaf core shared by the CLI and the programmatic runner
 // (AD-5). They take a raw MikroORM `IMigrator` and import only from `@mikro-orm/*` (AD-10).
-export { createMigration, up, down, list, pending } from "./migrations";
+export { createMigration, up, down, list, pending, fresh } from "./migrations";
 export type {
   CreateMigrationFlags,
   CreateMigrationResult,

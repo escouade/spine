@@ -6,3 +6,4 @@ export { createMigration } from "./create";
 export type { CreateMigrationFlags, CreateMigrationResult } from "./create";
 export { up, down, list, pending } from "./run";
 export type { VersionFlags } from "./run";
+export { fresh } from "./fresh";
