@@ -21,6 +21,9 @@
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "bin": {
+    "spine-migrate": "./dist/cli/bin.js"
+  },
   "files": [
     "dist",
     "README.md"
