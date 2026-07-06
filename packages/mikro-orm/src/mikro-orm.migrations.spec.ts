@@ -8,6 +8,7 @@ import {
   SPINE_MIGRATION_DEFAULTS,
   resolveMigrationsOptions,
   mikroOrmOptionsToken,
+  DEFAULT_RETRY,
 } from "./mikro-orm.options";
 import { loadMigratorExtension } from "./mikro-orm.migrator";
 import {
@@ -305,11 +306,13 @@ describe("per-connection isolation + fail-closed collision guard (Story 1.3)", (
       registerMigrationConnection(
         "a",
         opts("app", { path: "./a", tableName: "m_a" }, "localhost"),
+        DEFAULT_RETRY,
         warn
       );
       registerMigrationConnection(
         "b",
         opts("app", { path: "./b", tableName: "m_b" }, "localhost"),
+        DEFAULT_RETRY,
         warn
       );
       expect(warn).toHaveBeenCalledWith(

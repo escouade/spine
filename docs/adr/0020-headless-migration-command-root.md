@@ -98,7 +98,8 @@ the CLI and the API, and keeps a `@spinejs/cli` extraction open.
 
 **Precondition (AD-3).** The headless boot assumes modules do **not** bind external resources in `onInit`
 — a Spine invariant the feature depends on, not one it can enforce. A module that opened a socket in
-`onInit` would have it opened by a migration run. This is stated in the code and the docs.
+`onInit` would have it opened by a migration run. This is stated verbatim in the `runMigrations`
+docstring (`cli/run-migrations.ts`) and this ADR.
 
 **Scope / cost.** The command targets **one** connection per run (no fan-out in v1). The registry that
 backs the unknown-connection check is process-global (one App composition per process — the normal CLI

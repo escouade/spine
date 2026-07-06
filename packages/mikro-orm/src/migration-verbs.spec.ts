@@ -68,6 +68,10 @@ describe.each(HARNESS_DRIVERS)("migration verbs on $name", (driver) => {
 
     // A second up with nothing pending is a no-op.
     expect(await up(migrator)).toHaveLength(0);
+
+    // And re-running create now finds no schema drift → no file, explicit "no changes" (FR-3).
+    const again = await createMigration(migrator);
+    expect(again).toEqual({ created: false, reason: "no-changes" });
   });
 
   test("down rolls back an applied migration, running its down() and clearing the tracking row (FR-5)", async () => {
@@ -143,11 +147,24 @@ describe.each(HARNESS_DRIVERS)("migration verbs on $name", (driver) => {
 // NFR-1 — the runtime and the CLI resolve the SAME connection config from one AppModule, no second
 // artifact to drift. sqlite runs unconditionally.
 describe("one config source: runtime boot vs runMigrations (NFR-1)", () => {
-  const snapshot = (orm: MikroORM) => ({
-    dbName: orm.config.get("dbName"),
-    migrationsPath: orm.config.get("migrations").path,
-    entities: (orm.config.get("entities") as unknown[]).length,
-  });
+  const snapshot = (orm: MikroORM) => {
+    const m = orm.config.get("migrations");
+    return {
+      driver: (orm.config.get("driver") as { name: string }).name,
+      dbName: orm.config.get("dbName"),
+      entities: (orm.config.get("entities") as unknown[]).length,
+      // The whole resolved migration settings block — driver, db, entities AND migration settings must
+      // match across both boot paths (the AC's full list), not just the folder.
+      migrations: {
+        path: m.path,
+        tableName: m.tableName,
+        emit: m.emit,
+        snapshot: m.snapshot,
+        transactional: m.transactional,
+        allOrNothing: m.allOrNothing,
+      },
+    };
+  };
 
   it("both boot paths derive identical driver/db/migrations config", async () => {
     const dir = makeExecutableMigrationsDir();

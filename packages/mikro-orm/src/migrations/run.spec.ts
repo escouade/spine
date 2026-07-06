@@ -28,6 +28,14 @@ describe("up", () => {
     expect(migrator.up).toHaveBeenCalledWith({ to: "20260705" });
   });
 
+  it("coerces --to 0 to the number 0 (umzug's revert-all sentinel)", async () => {
+    const migrator = fakeMigrator();
+
+    await up(migrator, { to: "0" });
+
+    expect(migrator.up).toHaveBeenCalledWith({ to: 0 });
+  });
+
   it("is a no-op when nothing is pending (returns empty)", async () => {
     const migrator = fakeMigrator({ up: vi.fn(async () => []) });
 
@@ -63,6 +71,14 @@ describe("down", () => {
     await down(migrator, { to: "20260701" });
 
     expect(migrator.down).toHaveBeenCalledWith({ to: "20260701" });
+  });
+
+  it("coerces down --to 0 to the number 0 (revert everything)", async () => {
+    const migrator = fakeMigrator();
+
+    await down(migrator, { to: "0" });
+
+    expect(migrator.down).toHaveBeenCalledWith({ to: 0 });
   });
 });
 

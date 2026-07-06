@@ -5,6 +5,7 @@ import {
   DEFAULT_CONNECTION,
   DEFAULT_RETRY,
   mikroOrmRef,
+  type RetryPolicy,
 } from "../mikro-orm.options";
 import {
   MikroOrmModule,
@@ -15,6 +16,7 @@ import { MigrationRunner } from "../mikro-orm.migration-runner";
 import {
   configuredMigrationConnections,
   isMigrationConnection,
+  migrationRetryFor,
 } from "../mikro-orm.migrations-registry";
 import {
   parseArgv,
@@ -32,6 +34,8 @@ interface MigrationCommandSpec {
   command: MigrationCommand;
   connectionName: string;
   flags: MigrationFlags;
+  /** The target connection's resolved retry policy (same as the app boot), for the out-of-band connect. */
+  retry: RetryPolicy;
 }
 
 const migrationCommandSpecToken = new InjectionToken<MigrationCommandSpec>(
@@ -57,8 +61,8 @@ export class MigrationCommandModule implements OnInit {
   constructor(private readonly spec: MigrationCommandSpec) {}
 
   async onInit(): Promise<void> {
-    const { orm, log, command, connectionName, flags } = this.spec;
-    await connectWithRetry(orm, DEFAULT_RETRY, log);
+    const { orm, log, command, connectionName, flags, retry } = this.spec;
+    await connectWithRetry(orm, retry, log);
     try {
       await runVerb(
         new MigrationRunner(orm, log, connectionName),
@@ -69,8 +73,19 @@ export class MigrationCommandModule implements OnInit {
       );
     } finally {
       // Close the connection this module opened, decoupled from `MikroOrmModule`'s `connected` flag —
-      // whose `onStop` (fired by the outer `app.stop()`) then skips it, so there is no double close.
-      await orm.close(true);
+      // whose `onStop` (fired by the outer `app.stop()`) then skips it, so there is no double close. A
+      // close failure must never mask the verb's outcome (a `finally` throw would replace it) or flip a
+      // successful, already-recorded migration to a failure — swallow it with a log, like the module's
+      // own `onStop`.
+      try {
+        await orm.close(true);
+      } catch (err) {
+        log.error(
+          `@spinejs/mikro-orm: failed to close the "${connectionName}" connection after the migration: ${String(
+            err
+          )}`
+        );
+      }
     }
   }
 
@@ -78,8 +93,9 @@ export class MigrationCommandModule implements OnInit {
     command: MigrationCommand;
     connection: string;
     flags: MigrationFlags;
+    retry: RetryPolicy;
   }): DynamicModule {
-    const { command, connection, flags } = input;
+    const { command, connection, flags, retry } = input;
     const isDefault = connection === DEFAULT_CONNECTION;
     const ormToken = isDefault ? MikroORM : mikroOrmRef(connection);
     // Import the connection so its token lands in THIS module's container (siblings can't see each
@@ -103,6 +119,7 @@ export class MigrationCommandModule implements OnInit {
             command,
             connectionName: connection,
             flags,
+            retry,
           }),
         },
       ],
@@ -170,6 +187,11 @@ async function runVerb(
  * outcome to an exit code, AD-5), so a programmatic caller is never killed. An unknown `--connection`
  * fails fast with an actionable list of the configured migration connections, before anything is
  * composed (FR-10, AD-6).
+ *
+ * **Precondition (AD-3):** the headless boot runs every module's `onInit`, so it assumes modules do
+ * **not** bind external resources (open sockets, listen on ports) in `onInit` — a Spine invariant the
+ * feature depends on, not one it can enforce. Transports and the DB connection bind in `onStart`, which
+ * this never calls.
  */
 export async function runMigrations(
   appModule: ModuleEntry,
@@ -178,6 +200,15 @@ export async function runMigrations(
 ): Promise<void> {
   const { command, connection, flags } = parseArgv(argv);
   const connectionName = connection ?? DEFAULT_CONNECTION;
+
+  // `fresh` parses (its grammar is defined from Story 2.3) but its guarded handler lands in Epic 3.
+  // Reject it here — before composing the app or opening a connection — so an unreachable DB does not
+  // mask this with a connection error (the diagnostic would otherwise be wrong).
+  if (command === "fresh") {
+    throw new Error(
+      `@spinejs/mikro-orm: "migration:fresh" is not available yet — it ships in the safe-automation epic (Epic 3).`
+    );
+  }
 
   // Fail before composing if the target is not a configured migration connection — an actionable list,
   // not an opaque "unknown provider" from DI (the registry is populated at AppModule import time).
@@ -198,6 +229,9 @@ export async function runMigrations(
         command,
         connection: connectionName,
         flags,
+        // The connection's configured retry (recorded at configure time), so the CLI connects with the
+        // same policy the app boot would — falling back to the default only if somehow absent.
+        retry: migrationRetryFor(connectionName) ?? DEFAULT_RETRY,
       }),
     ],
     {

@@ -490,7 +490,7 @@ spine-migrate migration:down    --module ./dist/app.module.js#AppModule
 ```
 
 `--module <path>#<Export>` is how the CLI finds your `AppModule`; `#<Export>` is optional (it defaults to
-the module's default export, then a `AppModule` named export). The exit code is `0` on success and
+a `AppModule` named export, then the module's default export). The exit code is `0` on success and
 non-zero on failure, so a failing migration fails your CI build.
 
 :::note Running TypeScript migrations
@@ -742,13 +742,13 @@ required only when a connection declares `migrations`.
 | `migration:list`    | Report executed migrations from the tracking table               | —                      |
 | `migration:pending` | Report migrations present but not yet executed                   | —                      |
 
-| Flag                  | Meaning                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------- |
-| `--module <path>#<E>` | Where the `AppModule` lives; `#<E>` defaults to the default export, then `AppModule`.       |
-| `--connection <name>` | Target a named connection; omitted targets the default. Unknown → error listing configured. |
-| `--to <version>`      | Migrate `up`/`down` to a specific migration version instead of latest / one step.           |
-| `--blank`             | `create` an empty migration to hand-write.                                                  |
-| `--initial`           | `create` the first migration for an existing schema.                                        |
+| Flag                  | Meaning                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------- |
+| `--module <path>#<E>` | Where the `AppModule` lives; `#<E>` defaults to a `AppModule` named export, then the default. |
+| `--connection <name>` | Target a named connection; omitted targets the default. Unknown → error listing configured.   |
+| `--to <version>`      | Migrate `up`/`down` to a specific migration version instead of latest / one step.             |
+| `--blank`             | `create` an empty migration to hand-write.                                                    |
+| `--initial`           | `create` the first migration for an existing schema.                                          |
 
 Exit code: `0` on success, non-zero on failure (the failure is logged). Actionable errors: a missing
 `@mikro-orm/migrations`, an unknown `--connection` (lists the configured ones), and a config collision

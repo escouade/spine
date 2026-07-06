@@ -103,8 +103,16 @@ export function parseArgv(argv: string[]): ParsedMigrationArgv {
 }
 
 function parseCommand(token: string): MigrationCommand {
-  const [namespace, verb] = token.split(":");
-  if (namespace !== "migration" || !verb || !isMigrationCommand(verb)) {
+  // Exactly two segments: `migration:<verb>`. A trailing segment (`migration:up:oops`) must NOT be
+  // silently truncated to `up` — the parser's contract is that a typo never runs the wrong verb.
+  const parts = token.split(":");
+  const [namespace, verb] = parts;
+  if (
+    parts.length !== 2 ||
+    namespace !== "migration" ||
+    !verb ||
+    !isMigrationCommand(verb)
+  ) {
     throw new Error(
       `@spinejs/mikro-orm: unknown migration command "${token}". Expected "migration:<verb>" where <verb> is one of: ${verbList}.`
     );

@@ -121,13 +121,27 @@ describe("loadAppModule", () => {
     expect((mod as { name: string }).name).toBe("AppModule");
   });
 
-  it("falls back to the default export when no #Export is given", async () => {
+  it("falls back to the default export when no #Export and no AppModule name", async () => {
     const file = join(dir, "app-default.mjs");
     writeFileSync(file, "export default class Root {}\n");
 
     const mod = await loadAppModule(file);
 
     expect((mod as { name: string }).name).toBe("Root");
+  });
+
+  it("prefers a AppModule named export over default (CJS-interop safety)", async () => {
+    // A CJS-compiled app exposes `default` as the module.exports wrapper (always defined); the named
+    // export is the class in both ESM and CJS, so it must win over `default`.
+    const file = join(dir, "app-both.mjs");
+    writeFileSync(
+      file,
+      "export default class Wrapper {}\nexport class AppModule {}\n"
+    );
+
+    const mod = await loadAppModule(file);
+
+    expect((mod as { name: string }).name).toBe("AppModule");
   });
 
   it("throws an actionable error when the named export is absent", async () => {

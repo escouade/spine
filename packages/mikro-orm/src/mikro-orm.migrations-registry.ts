@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import type { Options } from "@mikro-orm/core";
+import { DEFAULT_RETRY, type RetryPolicy } from "./mikro-orm.options";
 
 // MikroORM's own defaults for a connection that declares neither key — the effective values two
 // connections would silently share if nothing namespaced them apart.
@@ -15,6 +16,8 @@ interface MigrationConnectionInfo {
   tableName: string;
   /** Set when another connection shares this one's physical DB (host+dbName) — Story 3.1 refuses `fresh`. */
   sharedPhysical: boolean;
+  /** The connection's resolved startup retry policy, so the migration CLI connects like the app does. */
+  retry: RetryPolicy;
 }
 
 // Module-scoped registry of configured migration connections, keyed by connection name. It is populated
@@ -27,7 +30,10 @@ interface MigrationConnectionInfo {
 // automatic per-App teardown (deferred — see AD-6). `resetMigrationRegistry()` also clears it for tests.
 const registry = new Map<string, MigrationConnectionInfo>();
 
-const coordsOf = (options: Options): MigrationConnectionInfo => ({
+const coordsOf = (
+  options: Options,
+  retry: RetryPolicy
+): MigrationConnectionInfo => ({
   // Normalize so equivalent spellings of one folder collide (AD-6): `./migrations` === `migrations`
   // === `./migrations/` === an absolute path to the same directory.
   path: resolve(options.migrations?.path ?? MIKRO_ORM_DEFAULT_PATH),
@@ -35,6 +41,7 @@ const coordsOf = (options: Options): MigrationConnectionInfo => ({
   dbName: options.dbName,
   tableName: options.migrations?.tableName ?? MIKRO_ORM_DEFAULT_TABLE,
   sharedPhysical: false,
+  retry,
 });
 
 // A connection's physical-DB identity is only *known* when it configures a concrete, persistent
@@ -73,9 +80,10 @@ const dbLabel = (info: MigrationConnectionInfo): string =>
 export function registerMigrationConnection(
   name: string,
   options: Options,
+  retry: RetryPolicy = DEFAULT_RETRY,
   warn: (message: string) => void = (message) => console.warn(message)
 ): void {
-  const info = coordsOf(options);
+  const info = coordsOf(options, retry);
 
   // 1. Validate against existing peers WITHOUT mutating — so a throw leaves no partial state behind.
   for (const [otherName, other] of registry) {
@@ -144,6 +152,15 @@ export function isMigrationConnection(name: string): boolean {
 /** The names of every connection that configured migrations — for the "unknown connection" error list. */
 export function configuredMigrationConnections(): string[] {
   return [...registry.keys()];
+}
+
+/**
+ * The resolved startup retry policy a configured connection uses — so the migration CLI connects with
+ * the **same** policy the app boot would (single config source), not a hardcoded default. `undefined`
+ * for a connection that declared no migrations (it is not a migration target).
+ */
+export function migrationRetryFor(name: string): RetryPolicy | undefined {
+  return registry.get(name)?.retry;
 }
 
 /** Clears the registry. For test isolation, and for a process that composes more than one App. */
