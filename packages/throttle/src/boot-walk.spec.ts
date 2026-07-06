@@ -137,6 +137,92 @@ describe("boot walk of route-inline throttle specs (Story 2.2, NFR-3)", () => {
   });
 });
 
+// Post-merge review #38: a hand-built or plain-JS `meta.throttle` can carry malformed sub-fields the
+// downstream `.forEach` / `for…of` / `Object.entries` would crash on with a raw native `TypeError`.
+// The boot walk must reject each with a route-named `ThrottleConfigError` instead. (Three related
+// boot-walk findings are deferred to a future framework `MetaValidator` primitive — out of scope here.)
+describe("boot walk hardens malformed route-inline `meta.throttle` sub-fields (review #38)", () => {
+  const metaSnapshot = (throttle: unknown): RouteSnapshot[] => [
+    { meta: { throttle } },
+  ];
+
+  it("rejects `policies` that is an object, not an array — names the route (no TypeError)", () => {
+    const mod = moduleWalking(
+      metaSnapshot({ routeId: "POST /obj-policies", policies: { a: {} } })
+    );
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /POST \/obj-policies.*policies.*array.*got object/s
+    );
+  });
+
+  it("rejects `skip` that is a number, not an array — names the route (no TypeError)", () => {
+    const mod = moduleWalking(
+      metaSnapshot({ routeId: "POST /num-skip", skip: 5 })
+    );
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /POST \/num-skip.*skip.*array.*got number/s
+    );
+  });
+
+  it("rejects `skip` array holding a non-string entry — names the route", () => {
+    const mod = moduleWalking(
+      metaSnapshot({ routeId: "POST /bad-skip-entry", skip: ["ok", 3] })
+    );
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /POST \/bad-skip-entry.*skip.*policy-name strings.*got a number/s
+    );
+  });
+
+  it("rejects `override` that is a number, not a plain object — names the route (no TypeError)", () => {
+    const mod = moduleWalking(
+      metaSnapshot({ routeId: "POST /num-override", override: 3 })
+    );
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /POST \/num-override.*override.*object.*got number/s
+    );
+  });
+
+  it("rejects an `override` entry that is not a plain object — names the route and entry", () => {
+    const mod = moduleWalking(
+      metaSnapshot({
+        routeId: "POST /bad-override-entry",
+        override: { api: 3 },
+      })
+    );
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /POST \/bad-override-entry.*override\.api.*got number/s
+    );
+  });
+
+  it("rejects `disabled` that is a string, not a boolean — names the route", () => {
+    const mod = moduleWalking(
+      metaSnapshot({ routeId: "POST /str-disabled", disabled: "true" })
+    );
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /POST \/str-disabled.*disabled.*boolean.*got string/s
+    );
+  });
+
+  it("leaves a well-formed inline spec untouched (no false positive)", () => {
+    const mod = moduleWalking(
+      metaSnapshot({
+        routeId: "POST /well-formed",
+        policies: [{ limit: 5, windowMs: 1000, keyBy: () => "k" }],
+        skip: [],
+        override: {},
+        disabled: false,
+      })
+    );
+    expect(() => mod.onStart()).not.toThrow();
+  });
+});
+
 // The start hook fires through a real App boot: a bad route-inline spec rejects `app.start()`.
 const silentLogger = {
   info() {},

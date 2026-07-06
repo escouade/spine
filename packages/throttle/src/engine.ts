@@ -375,6 +375,12 @@ export function validateRouteThrottleMeta(
   const routeId = raw.routeId ?? UNSTAMPED_ROUTE_ID;
   const wired = Object.keys(keySources);
 
+  // A hand-built or plain-JS `meta.throttle` (no route helper) can carry malformed sub-fields that
+  // would otherwise crash the boot walk / request parse path with a raw native `TypeError` (e.g.
+  // `.forEach` on a non-array `policies`, `for…of` over a numeric `skip`). Fail loud with a
+  // route-named {@link ThrottleConfigError} first — same style as the config-error messages below.
+  assertRouteMetaShape(raw, routeId);
+
   for (const name of raw.skip ?? []) {
     if (!(name in policies)) {
       throw new ThrottleConfigError(
@@ -428,6 +434,89 @@ function readThrottleRouteMeta(
     return undefined;
   }
   return value as ThrottleRouteMeta;
+}
+
+/**
+ * Structural guard for a `meta.throttle` spec: the route helpers copy an author's
+ * {@link ThrottleRouteOption} verbatim, but a hand-built or plain-JS target can hand us malformed
+ * sub-fields the downstream `.forEach` / `for…of` / `Object.entries` would crash on with a native
+ * `TypeError`. Rejects each with a route-named {@link ThrottleConfigError} instead; well-formed specs
+ * pass untouched. Fields are read as `unknown` (their static types cannot be trusted off an opaque
+ * `meta`).
+ */
+function assertRouteMetaShape(raw: ThrottleRouteMeta, routeId: string): void {
+  const meta = raw as {
+    policies?: unknown;
+    skip?: unknown;
+    override?: unknown;
+    disabled?: unknown;
+  };
+  const fail = (rule: string): never => {
+    throw new ThrottleConfigError(routeId, rule);
+  };
+
+  if (meta.disabled !== undefined && typeof meta.disabled !== "boolean") {
+    fail(
+      `\`throttle.disabled\` must be a boolean (got ${describeType(
+        meta.disabled
+      )})`
+    );
+  }
+  if (meta.policies !== undefined && !Array.isArray(meta.policies)) {
+    fail(
+      `\`throttle.policies\` must be an array of policies (got ${describeType(
+        meta.policies
+      )})`
+    );
+  }
+  if (meta.skip !== undefined) {
+    if (!Array.isArray(meta.skip)) {
+      fail(
+        `\`throttle.skip\` must be an array of policy names (got ${describeType(
+          meta.skip
+        )})`
+      );
+    }
+    for (const name of meta.skip as unknown[]) {
+      if (typeof name !== "string") {
+        fail(
+          `\`throttle.skip\` must contain only policy-name strings (got a ${describeType(
+            name
+          )})`
+        );
+      }
+    }
+  }
+  if (meta.override !== undefined) {
+    if (!isPlainObject(meta.override)) {
+      fail(
+        `\`throttle.override\` must be an object mapping policy names to override values ` +
+          `(got ${describeType(meta.override)})`
+      );
+    }
+    for (const [name, value] of Object.entries(
+      meta.override as Record<string, unknown>
+    )) {
+      if (!isPlainObject(value)) {
+        fail(
+          `\`throttle.override.${name}\` must be an object of override values ` +
+            `(got ${describeType(value)})`
+        );
+      }
+    }
+  }
+}
+
+/** A non-null, non-array object — the shape `override` and each of its entries must have. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Human-readable runtime kind for a config-error `(got …)` suffix (`null`/`array` over bare `object`). */
+function describeType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
 }
 
 /** Smallest `remaining`, tie-break soonest reset (FR-4's most-restrictive rule). */
