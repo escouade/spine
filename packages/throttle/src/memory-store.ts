@@ -3,6 +3,7 @@ import type {
   ConsumeResult,
   StorePolicy,
   ThrottleStore,
+  ThrottleStoreStats,
 } from "./throttle.types";
 
 /**
@@ -22,6 +23,11 @@ export interface InMemoryThrottleStoreOptions {
    * (lazy purge on access still applies). Default 60 000.
    */
   sweepIntervalMs?: number;
+  /**
+   * Default max tracked keys **per policy space** when a policy carries no `maxKeys` of its own
+   * (AD-5 memory bound). Beyond it the least-recently-used key is evicted. Default 10 000.
+   */
+  maxKeysPerPolicy?: number;
 }
 
 /**
@@ -37,6 +43,8 @@ interface KeyLog {
 /** One policy's isolated key space (AD-5). Map insertion order doubles as the LRU order. */
 interface PolicySpace {
   keys: Map<string, KeyLog>;
+  /** Keys dropped by this space's max-keys LRU bound (never by another policy's flood). */
+  evictions: number;
 }
 
 /**
@@ -54,10 +62,12 @@ interface PolicySpace {
 export class InMemoryThrottleStore implements ThrottleStore {
   private readonly spaces = new Map<string, PolicySpace>();
   private readonly clock: Clock;
+  private readonly maxKeysPerPolicy: number;
   private sweepTimer?: ReturnType<typeof setInterval>;
 
   constructor(options: InMemoryThrottleStoreOptions = {}) {
     this.clock = options.clock ?? monotonicClock;
+    this.maxKeysPerPolicy = options.maxKeysPerPolicy ?? 10_000;
     const sweepIntervalMs = options.sweepIntervalMs ?? 60_000;
     if (sweepIntervalMs > 0) {
       this.sweepTimer = setInterval(() => this.sweep(), sweepIntervalMs);
@@ -69,17 +79,19 @@ export class InMemoryThrottleStore implements ThrottleStore {
     const now = this.clock.now();
     let space = this.spaces.get(policy.id);
     if (!space) {
-      space = { keys: new Map() };
+      space = { keys: new Map(), evictions: 0 };
       this.spaces.set(policy.id, space);
     }
 
     let log = space.keys.get(key);
     if (!log) {
       log = { hits: [], windowMs: policy.windowMs };
-      space.keys.set(key, log);
     } else {
       log.windowMs = policy.windowMs;
+      space.keys.delete(key); // re-inserted below: Map order = LRU order, access = touch
     }
+    space.keys.set(key, log);
+    this.enforceBound(space, policy, key);
 
     // Lazy purge: drop hits that slid out of the window.
     const cutoff = now - policy.windowMs;
@@ -98,6 +110,35 @@ export class InMemoryThrottleStore implements ThrottleStore {
       totalHits: log.hits.length,
       resetMs: log.hits[0] + policy.windowMs - now,
     };
+  }
+
+  /** `{ size, evictions }` per policy space, readable at any time (FR-14 introspection capability). */
+  stats(): Record<string, ThrottleStoreStats> {
+    const out: Record<string, ThrottleStoreStats> = {};
+    for (const [id, space] of this.spaces) {
+      out[id] = { size: space.keys.size, evictions: space.evictions };
+    }
+    return out;
+  }
+
+  /**
+   * Max-keys LRU bound (AD-5), scoped to ONE policy space: evicting under policy A's flood never
+   * touches policy B's counters. The just-touched `key` sits last in the Map, so the first
+   * iterated entry is the least recently used.
+   */
+  private enforceBound(
+    space: PolicySpace,
+    policy: StorePolicy,
+    key: string
+  ): void {
+    const bound = Math.max(1, policy.maxKeys ?? this.maxKeysPerPolicy);
+    while (space.keys.size > bound) {
+      const oldest = space.keys.keys().next().value as string;
+      // Never evict the key being served (only reachable with bound = 1).
+      if (oldest === key) break;
+      space.keys.delete(oldest);
+      space.evictions += 1;
+    }
   }
 
   /** Releases the sweep timer and drops all state. Idempotent. */

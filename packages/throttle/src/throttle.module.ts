@@ -1,5 +1,5 @@
 import { InjectionToken, Module } from "@spinejs/core";
-import type { DynamicModule } from "@spinejs/core";
+import type { DynamicModule, OnStop } from "@spinejs/core";
 import type { GatewayContext } from "@spinejs/gateway-core";
 import { validatePolicies } from "./policy-validation";
 import { InMemoryThrottleStore } from "./memory-store";
@@ -37,6 +37,7 @@ export interface ThrottleModuleOptions {
 // Internal per-instance tokens: each `configure()` returns a `fresh` module node providing its own
 // values for them, so nothing leaks between named instances.
 const storeToken = new InjectionToken<ThrottleStore>("throttle.store");
+const ownsStoreToken = new InjectionToken<boolean>("throttle.owns-store");
 
 // Public interceptor token registry, memoized per instance name — `throttleInterceptorRef("api")`
 // always returns the same token object, so the providing node and the injecting app agree on it
@@ -77,9 +78,23 @@ export function throttleInterceptorRef(
  * multi-gateway app calls `configure({ name })` once per gateway — two names, two instances, two
  * stores. Config never merges per class (AD-7, the mikro-orm fresh-node precedent). No
  * configuration → no interceptor in the chain → no throttling and zero overhead.
+ *
+ * Store lifecycle: the module disposes the default store it created on stop (releasing the
+ * reclamation sweep). A store the app passed in stays the app's to dispose — it may outlive one
+ * gateway (e.g. a shared Redis-backed store).
  */
-@Module({})
-export class ThrottleModule {
+@Module({ inject: [storeToken, ownsStoreToken] as const })
+export class ThrottleModule implements OnStop {
+  constructor(
+    private readonly store: ThrottleStore,
+    private readonly ownsStore: boolean
+  ) {}
+
+  /** Disposes the owned default store (its periodic unref'd sweep) when the app stops. */
+  onStop(): void {
+    if (this.ownsStore) this.store.dispose?.();
+  }
+
   static configure(options: ThrottleModuleOptions): DynamicModule {
     const name = options.name ?? "default";
     const keySources = options.keySources ?? {};
@@ -108,6 +123,7 @@ export class ThrottleModule {
             options.store ??
             new InMemoryThrottleStore({ clock: options.clock }),
         },
+        { provide: ownsStoreToken, value: options.store === undefined },
         {
           provide: throttleInterceptorRef(name),
           inject: [storeToken] as const,

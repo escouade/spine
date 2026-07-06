@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, Module } from "@spinejs/core";
 import type { Logger, ModuleEntry } from "@spinejs/core";
 import { ThrottleModule, throttleInterceptorRef } from "./throttle.module";
+import { InMemoryThrottleStore } from "./memory-store";
 import { ThrottleInterceptor } from "./interceptor";
 import { ThrottleConfigError } from "./policy-validation";
 import { validatePolicy } from "./policy-validation";
@@ -134,6 +135,57 @@ describe("ThrottleModule.configure (Story 1.3)", () => {
     } finally {
       await app.stop();
     }
+  });
+});
+
+describe("store lifecycle (Story 1.5)", () => {
+  it("disposes the owned default store (its unref'd sweep) when the app stops", async () => {
+    const dispose = vi.spyOn(InMemoryThrottleStore.prototype, "dispose");
+
+    @Module({
+      inject: [throttleInterceptorRef("lifecycle")] as const,
+      imports: [
+        ThrottleModule.configure({
+          name: "lifecycle",
+          policies: { global: policy() },
+        }),
+      ],
+    })
+    class LifecycleModule {
+      constructor(_interceptor: ThrottleInterceptor) {}
+    }
+
+    const app = makeApp([LifecycleModule]);
+    await app.init();
+    expect(dispose).not.toHaveBeenCalled();
+    await app.stop();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    dispose.mockRestore();
+  });
+
+  it("leaves an app-provided store alone on stop (the app owns its lifecycle)", async () => {
+    const custom = new InMemoryThrottleStore();
+    const dispose = vi.spyOn(custom, "dispose");
+
+    @Module({
+      inject: [throttleInterceptorRef("custom-store")] as const,
+      imports: [
+        ThrottleModule.configure({
+          name: "custom-store",
+          policies: { global: policy() },
+          store: custom,
+        }),
+      ],
+    })
+    class CustomStoreModule {
+      constructor(_interceptor: ThrottleInterceptor) {}
+    }
+
+    const app = makeApp([CustomStoreModule]);
+    await app.init();
+    await app.stop();
+    expect(dispose).not.toHaveBeenCalled();
+    custom.dispose();
   });
 });
 
