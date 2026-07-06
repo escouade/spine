@@ -136,6 +136,36 @@ describe("ThrottleModule.configure (Story 1.3)", () => {
       await app.stop();
     }
   });
+
+  it("fails at boot when two instances reuse a name (AD-7 isolation enforced, not silent first-wins)", async () => {
+    // A shared, timer-less store keeps the failed boot from leaking a sweep interval.
+    const store = new InMemoryThrottleStore({ sweepIntervalMs: 0 });
+
+    @Module({
+      inject: [throttleInterceptorRef("dup")] as const,
+      imports: [
+        ThrottleModule.configure({
+          name: "dup",
+          policies: { a: policy() },
+          store,
+        }),
+        ThrottleModule.configure({
+          name: "dup",
+          policies: { b: policy() },
+          store,
+        }),
+      ],
+    })
+    class DupModule {
+      constructor(_interceptor: ThrottleInterceptor) {}
+    }
+
+    const app = makeApp([DupModule]);
+    await expect(app.init()).rejects.toThrow(ThrottleConfigError);
+    // Tear down the instance that DID claim the name, so a later test can reuse "dup".
+    await app.stop().catch(() => {});
+    store.dispose();
+  });
 });
 
 describe("store lifecycle (Story 1.5)", () => {
@@ -196,7 +226,7 @@ describe("boot validation (NFR-3)", () => {
   it("rejects a non-positive limit, naming the policy and the rule", () => {
     expect(configureWith(policy({ limit: 0 }))).toThrow(ThrottleConfigError);
     expect(configureWith(policy({ limit: 0 }))).toThrow(
-      /"offender".*`limit` must be a positive number/
+      /"offender".*`limit` must be a positive integer/
     );
     expect(configureWith(policy({ limit: -1 }))).toThrow(ThrottleConfigError);
   });
@@ -204,6 +234,24 @@ describe("boot validation (NFR-3)", () => {
   it("rejects a non-positive windowMs", () => {
     expect(configureWith(policy({ windowMs: 0 }))).toThrow(
       /"offender".*`windowMs` must be a positive number/
+    );
+  });
+
+  it("rejects a non-integer limit (a fractional slot count is a config bug)", () => {
+    expect(configureWith(policy({ limit: 2.5 }))).toThrow(
+      /"offender".*`limit` must be a positive integer/
+    );
+  });
+
+  it("rejects a non-positive/non-integer maxKeys (NaN would disable the LRU bound)", () => {
+    expect(configureWith(policy({ maxKeys: 0 }))).toThrow(
+      /"offender".*`maxKeys` must be a positive integer/
+    );
+    expect(configureWith(policy({ maxKeys: 2.5 }))).toThrow(
+      /"offender".*`maxKeys` must be a positive integer/
+    );
+    expect(configureWith(policy({ maxKeys: Number.NaN }))).toThrow(
+      /"offender".*`maxKeys`/
     );
   });
 

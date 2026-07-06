@@ -8,6 +8,7 @@ when unconfigured.
 // src/main.ts
 import { ThrottleModule, throttleInterceptorRef } from "@spinejs/throttle";
 import type { ThrottleInterceptor } from "@spinejs/throttle";
+import { throttleHttp } from "@spinejs/throttle/http";
 import { HttpGatewayModule } from "@spinejs/http-gateway";
 
 HttpGatewayModule.configure({
@@ -16,9 +17,9 @@ HttpGatewayModule.configure({
       policies: {
         global: { limit: 100, windowMs: 60_000, keyBy: "ip", scope: "gateway" },
       },
-      keySources: {
-        /* wired from @spinejs/throttle/http — see the docs */
-      },
+      // Wires the `'ip'` key source AND turns on `RateLimit-*` + `Retry-After` headers (on by
+      // default; pass `{ headers: false }` to disable). Presentation lives on `./http`.
+      ...throttleHttp(),
     }),
   ],
   interceptors: {

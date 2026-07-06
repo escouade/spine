@@ -1,7 +1,7 @@
 import { InjectionToken, Module } from "@spinejs/core";
-import type { DynamicModule, OnStop } from "@spinejs/core";
+import type { DynamicModule, OnInit, OnStop } from "@spinejs/core";
 import type { GatewayContext } from "@spinejs/gateway-core";
-import { validatePolicies } from "./policy-validation";
+import { validatePolicies, ThrottleConfigError } from "./policy-validation";
 import { InMemoryThrottleStore } from "./memory-store";
 import { ThrottleInterceptor } from "./interceptor";
 import type { ResolvedThrottleConfig } from "./engine";
@@ -9,7 +9,7 @@ import type {
   Clock,
   KeySelector,
   LimitReachedEvent,
-  ThrottleOutcome,
+  ThrottleErrorEvent,
   ThrottlePolicy,
   ThrottleStore,
 } from "./throttle.types";
@@ -24,10 +24,16 @@ export interface ThrottleModuleOptions {
   keySources?: Record<string, KeySelector>;
   /** Fired on every rejection with `{ policyName, routeId, keyHash, retryAfterMs }` (FR-14). */
   onLimitReached?: (event: LimitReachedEvent) => void;
+  /** Fired on every policy-evaluation failure (throwing selector/store) — fail-closed telemetry (FR-14). */
+  onError?: (event: ThrottleErrorEvent) => void;
   /** Opt-in: also pass the raw (pre-hash) key to `onLimitReached` — off by default (PII). */
   emitRawKey?: boolean;
-  /** Outcome observer (AD-8): the `./http` preset's header translator plugs in here. */
-  onOutcome?: (ctx: GatewayContext, outcome: ThrottleOutcome) => void;
+  /**
+   * Outcome observer (AD-8): invoked once per dispatch; reads the outcome ctx slot via
+   * `readThrottleOutcome(ctx)`. The `./http` preset's `throttleHttp()` wires its header translator
+   * here automatically — HTTP presentation lives on `./http`, not hand-wired on this module.
+   */
+  onOutcome?: (ctx: GatewayContext) => void;
   /** Injectable time source for the default store (FR-21). Monotonic default. */
   clock?: Clock;
   /** Instance name for multi-gateway apps — each name is a fully isolated instance (AD-7). */
@@ -38,6 +44,14 @@ export interface ThrottleModuleOptions {
 // values for them, so nothing leaks between named instances.
 const storeToken = new InjectionToken<ThrottleStore>("throttle.store");
 const ownsStoreToken = new InjectionToken<boolean>("throttle.owns-store");
+const instanceNameToken = new InjectionToken<string>("throttle.instance-name");
+
+// Instance names claimed by the currently-booted modules of THIS app (added on `onInit`, released on
+// `onStop`). Two `configure()` calls with the same name (incl. two implicit `default`s) would both
+// export `throttleInterceptorRef(name)` and the container would silently keep the first (first-wins),
+// merging quotas contra AD-7 — so a name reuse fails loud at boot. Scoped by lifecycle, not global:
+// sequential apps that each stop cleanly can reuse a name freely.
+const activeInstanceNames = new Set<string>();
 
 // Public interceptor token registry, memoized per instance name — `throttleInterceptorRef("api")`
 // always returns the same token object, so the providing node and the injecting app agree on it
@@ -83,15 +97,31 @@ export function throttleInterceptorRef(
  * reclamation sweep). A store the app passed in stays the app's to dispose — it may outlive one
  * gateway (e.g. a shared Redis-backed store).
  */
-@Module({ inject: [storeToken, ownsStoreToken] as const })
-export class ThrottleModule implements OnStop {
+@Module({
+  inject: [storeToken, ownsStoreToken, instanceNameToken] as const,
+})
+export class ThrottleModule implements OnInit, OnStop {
   constructor(
     private readonly store: ThrottleStore,
-    private readonly ownsStore: boolean
+    private readonly ownsStore: boolean,
+    private readonly instanceName: string
   ) {}
 
-  /** Disposes the owned default store (its periodic unref'd sweep) when the app stops. */
+  /** Claims this instance's name for the app, failing loud if another instance already holds it (AD-7). */
+  onInit(): void {
+    if (activeInstanceNames.has(this.instanceName)) {
+      throw new ThrottleConfigError(
+        this.instanceName,
+        `a throttle instance named "${this.instanceName}" is already configured in this app — ` +
+          "give each `ThrottleModule.configure()` a unique `name` (AD-7)"
+      );
+    }
+    activeInstanceNames.add(this.instanceName);
+  }
+
+  /** Releases the name claim and disposes the owned default store (its unref'd sweep) when the app stops. */
   onStop(): void {
+    activeInstanceNames.delete(this.instanceName);
     if (this.ownsStore) this.store.dispose?.();
   }
 
@@ -106,6 +136,7 @@ export class ThrottleModule implements OnStop {
       policies: options.policies,
       keySources,
       onLimitReached: options.onLimitReached,
+      onError: options.onError,
       emitRawKey: options.emitRawKey ?? false,
       onOutcome: options.onOutcome,
     };
@@ -124,6 +155,7 @@ export class ThrottleModule implements OnStop {
             new InMemoryThrottleStore({ clock: options.clock }),
         },
         { provide: ownsStoreToken, value: options.store === undefined },
+        { provide: instanceNameToken, value: name },
         {
           provide: throttleInterceptorRef(name),
           inject: [storeToken] as const,

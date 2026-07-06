@@ -18,7 +18,7 @@ import { z } from "zod";
 import { ThrottleModule, throttleInterceptorRef } from "./throttle.module";
 import type { ThrottleInterceptor } from "./interceptor";
 import { ThrottleConfigError } from "./policy-validation";
-import { ipKeySource, rateLimitHeaders } from "./http";
+import { ipKeySource, throttleHttp } from "./http";
 import { FakeClock } from "./testing";
 import type { GatewayContext } from "@spinejs/gateway-core";
 
@@ -108,8 +108,9 @@ async function bootApp(): Promise<Harness> {
                 scope: "gateway",
               },
             },
-            keySources: { ip: ipKeySource() },
-            onOutcome: rateLimitHeaders(),
+            // One-line HTTP preset wiring: 'ip' key source + RateLimit-*/Retry-After headers on by
+            // default (no hand-wired onOutcome — presentation lives on ./http, AD-7/AD-8).
+            ...throttleHttp(),
             clock,
           }),
         ],
