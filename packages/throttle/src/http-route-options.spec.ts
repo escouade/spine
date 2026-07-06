@@ -75,16 +75,34 @@ describe("HTTP route options through real verb helpers (Story 1.8)", () => {
         },
         () => "ok"
       );
+      // Attempts to override the inline policy by its synthesized `routeId#index` id. Inline policies
+      // are NON-overridable — `override` addresses only named gateway defaults — so this must NOT take.
+      overrideAttempt = post(
+        "/override-attempt",
+        {
+          throttle: {
+            policies: [{ limit: 1, windowMs: 60_000, keyBy: () => "victim" }],
+            override: { "POST /override-attempt#0": { limit: 100 } },
+          },
+        },
+        () => "ok"
+      );
     }
 
     const pipeline = pipelineWith({});
-    const [login, other] = routesOf(new LoginController());
+    const [login, other, overrideAttempt] = routesOf(new LoginController());
 
     expect((await send(pipeline, login)).ok).toBe(true);
     const rejected = await send(pipeline, login);
     expect(rejected).toMatchObject({ ok: false, code: "TOO_MANY_REQUESTS" });
     // routeId#index scoping: the same inline policy on another route has its own bucket.
     expect((await send(pipeline, other)).ok).toBe(true);
+    // Non-overridable: naming the inline policy in `override` does NOT loosen it to 100 — the framework
+    // refuses the re-tune (the synthesized inline id is not an overridable gateway default).
+    expect(await send(pipeline, overrideAttempt)).toMatchObject({
+      ok: false,
+      code: "INTERNAL",
+    });
   });
 
   it("`skip: ['name']` disables only that named default for the route", async () => {

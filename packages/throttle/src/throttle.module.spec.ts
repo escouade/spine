@@ -235,6 +235,21 @@ describe("boot validation (NFR-3)", () => {
     expect(configureWith(policy({ windowMs: 0 }))).toThrow(
       /"offender".*`windowMs` must be a positive number/
     );
+    expect(configureWith(policy({ windowMs: -1 }))).toThrow(
+      ThrottleConfigError
+    );
+  });
+
+  it("rejects a non-finite windowMs (NaN/Infinity would break resetMs and Retry-After arithmetic)", () => {
+    expect(configureWith(policy({ windowMs: Number.NaN }))).toThrow(
+      /"offender".*`windowMs` must be a positive number/
+    );
+    expect(
+      configureWith(policy({ windowMs: Number.POSITIVE_INFINITY }))
+    ).toThrow(/"offender".*`windowMs` must be a positive number/);
+    expect(configureWith(policy({ windowMs: Number.NaN }))).toThrow(
+      ThrottleConfigError
+    );
   });
 
   it("rejects a non-integer limit (a fractional slot count is a config bug)", () => {

@@ -9,9 +9,11 @@ import type {
 } from "@spinejs/gateway-core";
 import { ThrottleInterceptor } from "./interceptor";
 import type { ResolvedThrottleConfig } from "./engine";
+import { ThrottleConfigError } from "./policy-validation";
 import { InMemoryThrottleStore } from "./memory-store";
 import { hashKey } from "./key-pipeline";
 import { FakeClock } from "./testing";
+import { z } from "zod";
 import {
   readThrottleOutcome,
   type LimitReachedEvent,
@@ -102,6 +104,31 @@ const dispatch = (
     errorMapper,
     [interceptor]
   ).dispatch(target, ctx, rawInput);
+
+/**
+ * Dispatches through an errorMapper that CAPTURES the thrown error, so a boot/config rejection can be
+ * proven to be a {@link ThrottleConfigError} — not merely the blanket `INTERNAL` code the shared
+ * mapper collapses every error to (which a stray NPE would also produce).
+ */
+async function dispatchCapturingError(
+  interceptor: ThrottleInterceptor,
+  target: LoadedRoute<Ctx> = route(),
+  ctx: Ctx = {}
+): Promise<{ envelope: Envelope<unknown, string>; error: unknown }> {
+  let error: unknown;
+  const capturing: ErrorMapper = {
+    toCode: (err) => {
+      error = err;
+      return "INTERNAL";
+    },
+  };
+  const envelope = await new DispatchPipeline<Ctx, string, LoadedRoute<Ctx>>(
+    passthroughValidator,
+    capturing,
+    [interceptor]
+  ).dispatch(target, ctx, undefined);
+  return { envelope, error };
+}
 
 describe("ThrottleEngine composition (Story 1.7)", () => {
   it("rejects with TOO_MANY_REQUESTS + meta.retryAfterMs when any policy is exhausted", async () => {
@@ -288,9 +315,15 @@ describe("selector return-value handling (FR-6 edge cases)", () => {
 describe("unstamped-target guard (AD-3/AD-7)", () => {
   it("fails loud when a route-scoped policy hits a target with no stamped routeId", async () => {
     const interceptor = makeInterceptor({ perRoute: policy() }); // route-scoped default
-    const envelope = await dispatch(interceptor, bareTarget());
-    // The ThrottleConfigError escapes the interceptor; the pipeline maps it to an error envelope.
+    const { envelope, error } = await dispatchCapturingError(
+      interceptor,
+      bareTarget()
+    );
+    // The ThrottleConfigError escapes the interceptor; the pipeline maps it to an error envelope…
     expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+    // …and it is specifically a config error (the unstamped-target guard), not an incidental throw.
+    expect(error).toBeInstanceOf(ThrottleConfigError);
+    expect((error as Error).message).toMatch(/no stamped `routeId`/);
   });
 
   it("allows a gateway-scoped policy on an unstamped target (shared bucket is intended)", async () => {
@@ -306,23 +339,41 @@ describe("unstamped-target guard (AD-3/AD-7)", () => {
 });
 
 describe("custom selectors (FR-6)", () => {
-  it("receives ctx and the RAW pre-validation input", async () => {
-    const keyBy = vi.fn(() => "k");
-    const interceptor = makeInterceptor({ p: policy({ keyBy }) });
-    const ctx: Ctx = {};
-    const rawInput = { body: { email: " UPPER@x.y " } }; // deliberately un-normalized
+  it("receives ctx and the RAW, un-normalized input — the selector runs before the transforming validator", async () => {
+    // A schema that ACTUALLY transforms (trim + lowercase): post-validation differs from the raw
+    // input, so "the selector saw the raw value" becomes falsifiable. Move selection after validation
+    // and this test goes red — pinning the security property (bruteforce keys on un-normalized input).
+    const seenByKeyBy: unknown[] = [];
+    const keyBy = vi.fn((_ctx: Ctx, raw: unknown) => {
+      seenByKeyBy.push(raw);
+      return String((raw as { body?: { email?: string } })?.body?.email ?? "k");
+    });
+    let seenByHandler: unknown;
+    const interceptor = makeInterceptor({ p: policy({ keyBy, limit: 10 }) });
 
-    // The pipeline's validator would lowercase/trim — the selector sees the raw shape.
-    await dispatch(
-      interceptor,
-      route({
-        /* no inline policies */
+    const target: LoadedRoute<Ctx> = {
+      guards: [],
+      input: z.object({
+        body: z.object({ email: z.string().trim().toLowerCase() }),
       }),
-      ctx,
-      rawInput
-    );
+      invoke: (_ctx: Ctx, validated: unknown) => {
+        seenByHandler = validated;
+        return "handled";
+      },
+      meta: { throttle: { routeId: "POST /login" } },
+    };
+    const ctx: Ctx = {};
+    const rawInput = { body: { email: "  UPPER@X.Y  " } }; // deliberately un-normalized
+
+    const envelope = await dispatch(interceptor, target, ctx, rawInput);
+    expect(envelope.ok).toBe(true);
+    // The selector saw the UNTRANSFORMED raw value…
     expect(keyBy).toHaveBeenCalledTimes(1);
     expect(keyBy).toHaveBeenCalledWith(ctx, rawInput);
+    expect(seenByKeyBy[0]).toEqual({ body: { email: "  UPPER@X.Y  " } });
+    // …while the handler (post-validation) received the normalized value — proving the transform is
+    // real and happens strictly AFTER selection.
+    expect(seenByHandler).toEqual({ body: { email: "upper@x.y" } });
   });
 
   it("skips the policy when the selector returns null", async () => {
@@ -528,43 +579,53 @@ describe("route spec semantics (AD-3 groundwork for Story 1.8)", () => {
 
   it("rejects `scope: 'gateway'` on a route-inline policy (interim request-path guard until Story 2.2)", async () => {
     const interceptor = makeInterceptor({});
-    const envelope = await dispatch(
+    const { envelope, error } = await dispatchCapturingError(
       interceptor,
       route({ policies: [policy({ scope: "gateway" })] })
     );
-    // The ThrottleConfigError escapes the interceptor; the pipeline maps it to an error envelope.
+    // The ThrottleConfigError escapes the interceptor; the pipeline maps it to an error envelope…
     expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+    // …and it is the config-error type, not an incidental throw the blanket INTERNAL would also hide.
+    expect(error).toBeInstanceOf(ThrottleConfigError);
   });
 
   it("rejects an `override` that would re-scope a gateway-scoped default to route (AD-3)", async () => {
     const interceptor = makeInterceptor({
       global: policy({ scope: "gateway" }),
     });
-    const envelope = await dispatch(
+    const { envelope, error } = await dispatchCapturingError(
       interceptor,
       route({ override: { global: { limit: 1 } } })
     );
     expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+    expect(error).toBeInstanceOf(ThrottleConfigError);
   });
 
   it("validates the MERGED override values (an override of limit:0 fails, not NaN Retry-After)", async () => {
     const interceptor = makeInterceptor({ login: policy({ limit: 100 }) });
-    const envelope = await dispatch(
+    const { envelope, error } = await dispatchCapturingError(
       interceptor,
       route({ override: { login: { limit: 0 } } })
     );
     expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+    expect(error).toBeInstanceOf(ThrottleConfigError);
   });
 
   it("rejects `skip`/`override` naming a policy that is not a configured default", async () => {
     const interceptor = makeInterceptor({ real: policy() });
-    expect(await dispatch(interceptor, route({ skip: ["typo"] }))).toEqual({
-      ok: false,
-      code: "INTERNAL",
-    });
-    expect(
-      await dispatch(interceptor, route({ override: { typo: { limit: 1 } } }))
-    ).toEqual({ ok: false, code: "INTERNAL" });
+    const skipResult = await dispatchCapturingError(
+      interceptor,
+      route({ skip: ["typo"] })
+    );
+    expect(skipResult.envelope).toEqual({ ok: false, code: "INTERNAL" });
+    expect(skipResult.error).toBeInstanceOf(ThrottleConfigError);
+
+    const overrideResult = await dispatchCapturingError(
+      interceptor,
+      route({ override: { typo: { limit: 1 } } })
+    );
+    expect(overrideResult.envelope).toEqual({ ok: false, code: "INTERNAL" });
+    expect(overrideResult.error).toBeInstanceOf(ThrottleConfigError);
   });
 
   it("gives an overridden default its OWN store space so a per-route maxKeys can't shrink the shared space", async () => {

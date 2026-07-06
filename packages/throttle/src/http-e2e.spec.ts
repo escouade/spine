@@ -70,7 +70,12 @@ class ApiController {
   login = post(
     "/login",
     {
-      body: z.object({ email: z.string(), password: z.string() }),
+      // The email is normalized (trim + lowercase) BY VALIDATION — so the bruteforce selector, which
+      // runs before validation, keys on the raw casing (UC-2 security, pinned below).
+      body: z.object({
+        email: z.string().trim().toLowerCase(),
+        password: z.string(),
+      }),
       throttle: {
         policies: [{ limit: 2, windowMs: 60_000, keyBy: identityAndIp }],
       },
@@ -210,6 +215,30 @@ describe("HTTP e2e (Story 1.10, UC-1/UC-2)", () => {
       expect(rejected.headers.get("Retry-After")).toBe("60");
       // A different identity from the same address still passes (per-identity bucket).
       expect((await request("/login", loginBody("bob"))).status).toBe(200);
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it("keys the bruteforce bucket on the RAW email, before validation trims/lowercases it (UC-2 security)", async () => {
+    const { app, request } = await bootApp();
+    try {
+      // Exhaust the two-attempt limit for the exact raw casing "Alice@x.y".
+      expect((await request("/login", loginBody("Alice@x.y"))).status).toBe(
+        200
+      );
+      expect((await request("/login", loginBody("Alice@x.y"))).status).toBe(
+        200
+      );
+      expect((await request("/login", loginBody("Alice@x.y"))).status).toBe(
+        429
+      );
+      // A different RAW casing normalizes to the SAME account post-validation ("alice@x.y"), yet keys
+      // a DIFFERENT throttle bucket — the selector ran on un-normalized input. Were selection to move
+      // after validation, this request would collide with the exhausted bucket and 429.
+      expect((await request("/login", loginBody("  alice@x.y  "))).status).toBe(
+        200
+      );
     } finally {
       await app.stop();
     }
