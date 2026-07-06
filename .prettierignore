@@ -11,3 +11,4 @@ packages/*/CHANGELOG.md
 
 # Golden OpenAPI document — byte-identical lock (AD-6); generated via UPDATE_GOLDEN, never reformatted
 packages/openapi/src/__fixtures__/*.openapi.json
+packages/openapi/src/__fixtures__/*.openapi.yaml

@@ -20,3 +20,4 @@ _bmad-output/
 # Match at any depth: nx runs vitest with cwd=packages/mikro-orm, but a root-level `vitest` run would
 # create the dir at the repo root.
 spine-verb-migrations-*/
+.claude/worktrees/

@@ -4878,6 +4878,7 @@ __metadata:
     "@seriousme/openapi-schema-validator": "npm:^2.9.0"
     "@spinejs/gateway-core": "workspace:^"
     "@spinejs/http-gateway": "workspace:^"
+    yaml: "npm:^2.9.0"
     zod: "npm:3.25.76"
   languageName: unknown
   linkType: soft
