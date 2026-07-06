@@ -50,6 +50,10 @@ export const configToken = new InjectionToken<AppConfig>("app.config");
 
 Chaque instance d'`InjectionToken` crée un `Symbol` unique en interne. Deux tokens ayant la même chaîne de description restent distincts — il n'y a pas de collision de noms.
 
+### Copies dupliquées de `@spinejs/core`
+
+Parce que les tokens reposent sur l'identité des Symbols, tout le process doit partager **une seule** copie de `@spinejs/core`. Si deux copies sont chargées — installation dupliquée dans `node_modules` (ranges de versions `@spinejs/*` désalignés dans votre lockfile), ou même installation chargée à la fois en ESM et en CJS — chaque copie fabrique ses propres Symbols de tokens, et les providers enregistrés via une copie se résolvent en `undefined` via l'autre. `App` le détecte et journalise un avertissement au boot nommant la cause. Si vous le voyez : lancez `npm ls @spinejs/core` ou `yarn why @spinejs/core`, alignez vos ranges `@spinejs/*`, puis dédupliquez le lockfile.
+
 ## Types de providers
 
 L'union `Provider<T>` a cinq formes :
