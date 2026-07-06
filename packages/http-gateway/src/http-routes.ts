@@ -388,6 +388,26 @@ export const sse: SseRouteFn = <
     headers: options.headers,
     sse: true,
   };
+  // Namespaced battery meta (AD-3): identical to the verb helpers — the user's `throttle` fields are
+  // copied VERBATIM under `meta.throttle` with `routeId = "GET /path"` stamped, so SSE routes carry
+  // route-level policies enforced by the throttle interceptor in the gateway's `connectInterceptors`.
+  const throttleOption = (options as { throttle?: unknown }).throttle;
+  if (
+    throttleOption !== undefined &&
+    throttleOption !== false &&
+    !isPlainObject(throttleOption)
+  ) {
+    throw new Error(
+      `SSE route "GET ${path}": \`throttle\` must be a throttle options object or \`false\` ` +
+        `(got ${
+          Array.isArray(throttleOption) ? "an array" : typeof throttleOption
+        }).`
+    );
+  }
+  (meta as { throttle?: unknown }).throttle = {
+    ...(throttleOption === false ? { disabled: true } : throttleOption),
+    routeId: `GET ${path}`,
+  };
   return makeRouteMarker<Ctx, HttpAddress, InputOf<S>>({
     address: { method: "GET", path },
     input: composeInput({ params: options.params, query: options.query }),

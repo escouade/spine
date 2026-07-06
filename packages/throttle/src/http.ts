@@ -31,6 +31,17 @@ declare module "@spinejs/http-gateway" {
     /** The stamped `meta.throttle` copy (user fields verbatim + `routeId`) — see AD-3. */
     throttle?: ThrottleRouteMeta;
   }
+
+  // The type parameters must repeat the target interface's list verbatim for declaration merging.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  interface SseRouteOptions<P, Q> {
+    /**
+     * Rate-limit policy for this SSE stream: the connection attempt is enforced by the throttle
+     * interceptor placed in the gateway's `connectInterceptors` slot (AD-6). Same option shape as a
+     * verb route — inline `policies`, `skip`, `override`, or `false`. Stream events are never counted.
+     */
+    throttle?: ThrottleRouteOption | false;
+  }
 }
 
 /**
