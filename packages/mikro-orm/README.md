@@ -132,6 +132,20 @@ MikroOrmModule.configure({
 });
 ```
 
+Run them with the `spine-migrate` CLI, pointed at the **same** `AppModule` your server boots — the exit
+code fails your CI build on failure:
+
+```bash
+spine-migrate migration:create  --module ./dist/app.module.js#AppModule
+spine-migrate migration:up      --module ./dist/app.module.js#AppModule   # + list / pending / down
+spine-migrate migration:up --connection analytics --module ./dist/app.module.js#AppModule
+```
+
+`--module <path>#<Export>` locates your `AppModule`; `--connection` targets a named connection (default
+otherwise). The default `emit: "ts"` needs a TS loader (`node --import tsx …`) or compiled `.js` output.
+The same operations run programmatically — `runMigrations(AppModule, argv)` (headless, rejects on
+failure, never `process.exit`) or an injected `MigrationRunner`.
+
 ## Limitations
 
 - **No cross-database atomicity** — multiple connections are supported, but a request writes at most one unless you opt into `multiWrite`, and even then flushes are best-effort sequential (no two-phase commit).

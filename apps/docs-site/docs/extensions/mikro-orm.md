@@ -470,6 +470,95 @@ If two connections would still collide — the same `path`, or the same physical
 naming both connections. When two connections share a physical database but keep **distinct** tracking
 tables, Spine warns instead: isolation is by config, not proof of separate databases.
 
+### Running migrations — the CLI
+
+`@spinejs/mikro-orm` ships a `spine-migrate` binary. Point it at the **same** `AppModule` your server
+boots and run a verb — driver, database, entities, and the `migrations` block all come from that module,
+so there is nothing else to configure:
+
+```bash
+# generate a migration from the diff between your entities and the snapshot
+spine-migrate migration:create  --module ./dist/app.module.js#AppModule
+
+# apply pending migrations, then inspect state
+spine-migrate migration:up      --module ./dist/app.module.js#AppModule
+spine-migrate migration:list    --module ./dist/app.module.js#AppModule   # executed
+spine-migrate migration:pending --module ./dist/app.module.js#AppModule   # not yet applied
+
+# roll the most recent one back
+spine-migrate migration:down    --module ./dist/app.module.js#AppModule
+```
+
+`--module <path>#<Export>` is how the CLI finds your `AppModule`; `#<Export>` is optional (it defaults to
+the module's default export, then a `AppModule` named export). The exit code is `0` on success and
+non-zero on failure, so a failing migration fails your CI build.
+
+:::note Running TypeScript migrations
+The default `emit: "ts"` writes TypeScript migrations, and Node cannot run `.ts` directly. Either run the
+CLI through a TypeScript loader in dev:
+
+```bash
+node --import tsx node_modules/.bin/spine-migrate migration:up --module ./src/app.module.ts#AppModule
+```
+
+or, in CI and production, run it against your **compiled** output (`--module ./dist/app.module.js#AppModule`,
+with compiled `.js` migrations). Prefer plain-JS migrations everywhere? Set `emit: "js"`.
+:::
+
+### The dev loop
+
+1. Edit an `EntitySchema`.
+2. `migration:create` — review the generated SQL. It is a plain file; nothing has touched the database
+   yet. No schema change → no file, and the command says so. `--blank` writes an empty migration to
+   hand-edit; `--initial` baselines an existing schema.
+3. `migration:up` — apply it. `migration:list` shows it recorded; `migration:pending` is now empty.
+4. Commit the migration file **and** the updated snapshot together.
+
+### The deploy loop
+
+In CI and production, apply migrations **explicitly** as a deploy step — never as a side effect of
+booting the app:
+
+```bash
+spine-migrate migration:up --module ./dist/app.module.js#AppModule
+```
+
+There is no advisory lock, so never run this where several replicas could race the same database: run it
+once, before the app rolls out.
+
+### Targeting a connection
+
+Every verb takes `--connection <name>` to target a named connection; without it the **default**
+connection is used. Each connection has its own folder, snapshot, and tracking table, so histories never
+cross. An unknown name fails with the list of the configured migration connections.
+
+```bash
+spine-migrate migration:create --connection analytics --module ./dist/app.module.js#AppModule
+```
+
+### The programmatic API
+
+The same operations run without the bin. `runMigrations(AppModule, argv)` boots your module graph
+**headless** — no server, no port — and runs one verb. It **resolves on success and rejects on failure,
+and never calls `process.exit`**, so it is safe to call from your own scripts:
+
+```ts
+// scripts/migrate.ts
+import { runMigrations } from "@spinejs/mikro-orm";
+import { AppModule } from "../src/app.module";
+
+await runMigrations(AppModule, ["migration:up", "--connection", "analytics"]);
+```
+
+Or inject a `MigrationRunner` and drive a connection directly — it logs what it applied, per connection:
+
+```ts
+// inject: [MigrationRunner]                    // the default connection
+// inject: [migrationRunnerRef("analytics")]    // a named one
+await runner.up();
+const executed = await runner.list();
+```
+
 ## Wiring it by hand (the factory) {#by-hand}
 
 `configure()` is not magic — it is a small, inspectable DI composition: a value provider for the
@@ -640,6 +729,48 @@ Spine applies the defaults from _Migrations_ above:
 
 `@mikro-orm/migrations` (`^6`, same major as `@mikro-orm/core`) is an **optional peer dependency**:
 required only when a connection declares `migrations`.
+
+### Migration CLI (`spine-migrate`)
+
+`spine-migrate migration:<verb> [flags]`. The verb and flags:
+
+| Verb                | Does                                                             | Flags                  |
+| ------------------- | ---------------------------------------------------------------- | ---------------------- |
+| `migration:create`  | Generate a migration from the entity/snapshot diff (writes only) | `--blank`, `--initial` |
+| `migration:up`      | Apply pending migrations (to latest, or `--to`)                  | `--to <version>`       |
+| `migration:down`    | Roll back the most recent migration (or down to `--to`)          | `--to <version>`       |
+| `migration:list`    | Report executed migrations from the tracking table               | —                      |
+| `migration:pending` | Report migrations present but not yet executed                   | —                      |
+
+| Flag                  | Meaning                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------- |
+| `--module <path>#<E>` | Where the `AppModule` lives; `#<E>` defaults to the default export, then `AppModule`.       |
+| `--connection <name>` | Target a named connection; omitted targets the default. Unknown → error listing configured. |
+| `--to <version>`      | Migrate `up`/`down` to a specific migration version instead of latest / one step.           |
+| `--blank`             | `create` an empty migration to hand-write.                                                  |
+| `--initial`           | `create` the first migration for an existing schema.                                        |
+
+Exit code: `0` on success, non-zero on failure (the failure is logged). Actionable errors: a missing
+`@mikro-orm/migrations`, an unknown `--connection` (lists the configured ones), and a config collision
+all name the next step.
+
+### `runMigrations(AppModule, argv)`
+
+```ts
+function runMigrations(appModule: ModuleEntry, argv: string[]): Promise<void>;
+```
+
+Boots the module graph headless (`app.init()` only — no transport binds a port), connects **only** the
+targeted connection, runs the verb, and closes it. **Resolves on success, rejects on failure, and never
+calls `process.exit`** — the stable programmatic contract. `argv` is the same `migration:<verb>` grammar
+the CLI parses (the bin is a thin exit-code wrapper over this).
+
+### `MigrationRunner` / `migrationRunnerRef(name)`
+
+An injectable per connection — the `MigrationRunner` class token for the default connection,
+`migrationRunnerRef(name)` for a named one (provided only when that connection declares `migrations`). It
+exposes `create` / `up` / `down` / `list` / `pending`, delegating to the same core the CLI uses, and logs
+applied/rolled-back migrations per connection through the Spine logger.
 
 ### `MikroOrmModule.register([...])`
 
