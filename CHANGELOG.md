@@ -1,3 +1,23 @@
+## 0.1.3 (2026-07-06)
+
+### 🚀 Features
+
+- **core:** warn at boot when duplicate @spinejs/core copies are loaded ([3006c9b](https://github.com/escouade/spine/commit/3006c9b))
+- **mikro-orm:** migrations config block + Spine defaults (Story 1.1) ([edaff63](https://github.com/escouade/spine/commit/edaff63))
+- **mikro-orm:** register Migrator extension, peer/optional dependency (Story 1.2) ([ccad8c4](https://github.com/escouade/spine/commit/ccad8c4))
+- **mikro-orm:** per-connection migration isolation + fail-closed collision guard (Story 1.3) ([ae44347](https://github.com/escouade/spine/commit/ae44347))
+- **openapi:** response envelope + multi-status (Story 1.5) ([52ac852](https://github.com/escouade/spine/commit/52ac852))
+
+### 🩹 Fixes
+
+- **gateway:** catch zod v4 errors in ZodValidator ([af64a4c](https://github.com/escouade/spine/commit/af64a4c))
+
+### ❤️ Thank You
+
+- Claude Fable 5
+- Claude Opus 4.8 (1M context)
+- Fabien Metais @metaisfabien
+
 ## 0.1.2 (2026-07-05)
 
 ### 🚀 Features
