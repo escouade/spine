@@ -24,6 +24,12 @@ export function tsupConfig(overrides: Options = {}): Options {
     sourcemap: true,
     clean: true,
     treeshake: true,
+    // Ship minified bundles (strips comments + mangles locals). `keepNames`
+    // preserves class/function names — SpineJS resolves DI tokens by name and
+    // reads `class.name`/decorator metadata, so mangling them would break
+    // consumers. Sourcemaps stay emitted for debugging into the lib.
+    minify: true,
+    keepNames: true,
     // Keep every @spinejs/* dependency external — referenced by import, never
     // inlined — in both the JS bundle and the .d.ts.
     external: [
