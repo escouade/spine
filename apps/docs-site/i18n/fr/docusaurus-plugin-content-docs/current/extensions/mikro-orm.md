@@ -578,6 +578,59 @@ await runner.up();
 const executed = await runner.list();
 ```
 
+### Réinitialiser une base de dev (`fresh`)
+
+`migration:fresh` droppe toutes les tables et ré-applique toutes les migrations depuis zéro — une remise
+à zéro locale rapide. C'est **destructif** et fermé hard contre la production, donc il exige deux
+confirmations indépendantes :
+
+```bash
+NODE_ENV=development spine-migrate migration:fresh --force-drop --module ./dist/app.module.js#AppModule
+```
+
+Il refuse (avant de toucher la base) sauf si **tout** est vrai : `NODE_ENV` vaut explicitement
+`development` ou `test` ; le flag orthogonal `--force-drop` est présent (le label d'env seul n'autorise
+jamais un drop) ; et la connexion cible ne partage **pas** une base physique avec une autre connexion
+configurée (un drop ne peut pas être prouvé cibler une base distincte). Chaque refus nomme l'étape
+suivante.
+
+### Auto-migrer au démarrage (`migrateOnStart`)
+
+Pour une base de dev locale qui doit rester à jour sans étape manuelle, activez `migrateOnStart` sur le
+bloc `migrations` de la connexion — il applique les migrations en attente au **démarrage** de l'app :
+
+```ts
+MikroOrmModule.configure({
+  driver,
+  dbName,
+  entities: [User],
+  migrations: { path: "./migrations", migrateOnStart: true }, // confort dev — off par défaut
+});
+```
+
+Il est gardé : il n'applique qu'après une vérification de dérive `checkMigrationNeeded()` (un schéma à
+jour est un no-op), et **uniquement** quand `NODE_ENV` vaut explicitement `development`/`test`. En
+production (ou un env inconnu/absent) il avertit et saute — l'app démarre normalement, mais **aucune
+migration n'est jamais un effet de bord d'un démarrage en production**.
+
+:::warning Pas de verrou d'avis (advisory lock)
+Spine n'a pas de verrou d'avis. N'utilisez jamais `migrateOnStart` là où plusieurs réplicas pourraient
+démarrer et courir sur la même base. En production, appliquez les migrations **explicitement** comme
+étape de déploiement (`spine-migrate migration:up`), une fois, avant le déploiement — et confirmez que le
+DSN pointe bien vers la base voulue.
+:::
+
+### La sûreté production, en un endroit
+
+- **Aucune migration n'est jamais appliquée comme effet de bord d'un démarrage en production.**
+  `migrateOnStart` et `fresh` refusent sauf si `NODE_ENV` vaut explicitement `development` ou `test` — la
+  production, une valeur inconnue et l'absence de valeur refusent toutes (fail-closed : l'environnement
+  doit _prouver_ qu'il n'est pas la production).
+- **`fresh` exige une seconde confirmation orthogonale** — `--force-drop` — en plus d'un `NODE_ENV`
+  non-prod, et refuse une connexion qui partage une base physique avec une autre.
+- **Pas de verrou d'avis.** Appliquez les migrations explicitement en CI/CD ; ne laissez jamais plusieurs
+  réplicas courir.
+
 ## Le câblage à la main (la factory) {#by-hand}
 
 `configure()` n'a rien de magique — c'est une petite composition DI inspectable : un provider de valeur
@@ -737,15 +790,16 @@ Tout champ omis de `retry` retombe sur sa valeur `DEFAULT_RETRY`.
 `MigrationsOptions` (une vue curatée de `Options["migrations"]` de MikroORM) — chaque clé est optionnelle
 et Spine applique les défauts de _Migrations_ ci-dessus :
 
-| Champ                | Type           | Défaut                               | Signification                                                       |
-| -------------------- | -------------- | ------------------------------------ | ------------------------------------------------------------------- |
-| `path`               | `string`       | `./migrations` (`/<name>` si nommée) | Dossier des fichiers de migration et du snapshot.                   |
-| `tableName`          | `string`       | `mikro_orm_migrations`               | Table de suivi des migrations exécutées.                            |
-| `emit`               | `"ts" \| "js"` | `"ts"`                               | Format des fichiers de migration.                                   |
-| `snapshot`           | `boolean`      | `true`                               | Garde un snapshot de schéma commité pour le diff.                   |
-| `transactional`      | `boolean`      | `true`                               | Exécute chaque migration dans une transaction.                      |
-| `allOrNothing`       | `boolean`      | `true`                               | Annule le batch entier en cas d'échec.                              |
-| `disableForeignKeys` | `boolean`      | _(off)_                              | Échappatoire reconstruction de table SQLite — voir l'avertissement. |
+| Champ                | Type           | Défaut                               | Signification                                                                                     |
+| -------------------- | -------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `path`               | `string`       | `./migrations` (`/<name>` si nommée) | Dossier des fichiers de migration et du snapshot.                                                 |
+| `tableName`          | `string`       | `mikro_orm_migrations`               | Table de suivi des migrations exécutées.                                                          |
+| `emit`               | `"ts" \| "js"` | `"ts"`                               | Format des fichiers de migration.                                                                 |
+| `snapshot`           | `boolean`      | `true`                               | Garde un snapshot de schéma commité pour le diff.                                                 |
+| `transactional`      | `boolean`      | `true`                               | Exécute chaque migration dans une transaction.                                                    |
+| `allOrNothing`       | `boolean`      | `true`                               | Annule le batch entier en cas d'échec.                                                            |
+| `disableForeignKeys` | `boolean`      | _(off)_                              | Échappatoire reconstruction de table SQLite — voir l'avertissement.                               |
+| `migrateOnStart`     | `boolean`      | `false`                              | Spine-only : applique les migrations en attente au démarrage, gardé (dev/test + dérive vérifiée). |
 
 `@mikro-orm/migrations` (`^6`, même majeure que `@mikro-orm/core`) est une **dépendance peer
 optionnelle** : requise uniquement quand une connexion déclare `migrations`.
@@ -761,6 +815,7 @@ optionnelle** : requise uniquement quand une connexion déclare `migrations`.
 | `migration:down`    | Annule la migration la plus récente (ou jusqu'à `--to`)                  | `--to <version>`       |
 | `migration:list`    | Liste les migrations exécutées depuis la table de suivi                  | —                      |
 | `migration:pending` | Liste les migrations présentes mais pas encore exécutées                 | —                      |
+| `migration:fresh`   | Droppe toutes les tables et ré-applique depuis zéro (reset dev)          | `--force-drop`         |
 
 | Flag                  | Signification                                                                                          |
 | --------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -769,10 +824,12 @@ optionnelle** : requise uniquement quand une connexion déclare `migrations`.
 | `--to <version>`      | Migre `up`/`down` jusqu'à une version précise plutôt que dernière / un cran.                           |
 | `--blank`             | `create` une migration vide à écrire à la main.                                                        |
 | `--initial`           | `create` la première migration pour un schéma existant.                                                |
+| `--force-drop`        | Requis par `fresh` — confirme le drop destructif (en plus d'un `NODE_ENV` non-prod).                   |
 
 Code de sortie : `0` en cas de succès, non nul en cas d'échec (l'échec est logué). Erreurs actionnables :
-un `@mikro-orm/migrations` manquant, une `--connection` inconnue (liste les connexions configurées) et une
-collision de config nomment tous l'étape suivante.
+un `@mikro-orm/migrations` manquant, une `--connection` inconnue (liste les connexions configurées), une
+collision de config, et les refus `NODE_ENV`/`--force-drop`/base-partagée de `fresh` nomment tous l'étape
+suivante.
 
 ### `runMigrations(AppModule, argv)`
 

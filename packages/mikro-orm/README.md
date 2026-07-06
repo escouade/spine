@@ -146,6 +146,13 @@ otherwise). The default `emit: "ts"` needs a TS loader (`node --import tsx …`)
 The same operations run programmatically — `runMigrations(AppModule, argv)` (headless, rejects on
 failure, never `process.exit`) or an injected `MigrationRunner`.
 
+**Production-safe by default.** `migration:fresh` (drop + re-apply, dev reset) and the opt-in
+`migrations.migrateOnStart` (apply pending at boot) refuse unless `NODE_ENV` is explicitly
+`development`/`test` — production, unknown, and unset all refuse (fail-closed). `fresh` additionally
+requires an orthogonal `--force-drop` and refuses a connection sharing a physical database. No migration
+is ever a side effect of a production boot; there is no advisory lock, so apply migrations explicitly in
+CI/CD.
+
 ## Limitations
 
 - **No cross-database atomicity** — multiple connections are supported, but a request writes at most one unless you opt into `multiWrite`, and even then flushes are best-effort sequential (no two-phase commit).
