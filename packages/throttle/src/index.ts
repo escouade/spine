@@ -19,6 +19,8 @@ export {
   TOO_MANY_REQUESTS,
 } from "./throttle.types";
 export { MAX_POLICY_LIMIT, ThrottleConfigError } from "./policy-validation";
+export { InMemoryThrottleStore, monotonicClock } from "./memory-store";
+export type { InMemoryThrottleStoreOptions } from "./memory-store";
 export { ThrottleInterceptor } from "./interceptor";
 export type { ResolvedThrottleConfig } from "./interceptor";
 export { ThrottleModule, throttleInterceptorRef } from "./throttle.module";
