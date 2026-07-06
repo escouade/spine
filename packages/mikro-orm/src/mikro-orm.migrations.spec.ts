@@ -277,6 +277,15 @@ describe("per-connection isolation + fail-closed collision guard (Story 1.3)", (
         resolveMigrationsOptions({ path: "./custom" }, "analytics")?.path
       ).toBe("./custom");
     });
+
+    it("strips the Spine-only migrateOnStart before the options reach MikroORM", () => {
+      const resolved = resolveMigrationsOptions({
+        path: "./m",
+        migrateOnStart: true,
+      });
+      expect(resolved).not.toHaveProperty("migrateOnStart");
+      expect(resolved?.path).toBe("./m");
+    });
   });
 
   describe("collision guard (AC2/AC3/AC4)", () => {

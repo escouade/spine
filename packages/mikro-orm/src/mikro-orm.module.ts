@@ -18,8 +18,10 @@ import { ClsModule, ClsService } from "@spinejs/cls";
 import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
 import { SpineMikroLogger } from "./mikro-orm.logger";
 import { MigrationRunner } from "./mikro-orm.migration-runner";
+import { up } from "./migrations";
 import { loadMigratorExtension } from "./mikro-orm.migrator";
 import { registerMigrationConnection } from "./mikro-orm.migrations-registry";
+import { isDevelopmentOrTest } from "./mikro-orm.production-safety";
 import {
   entityForRepository,
   isRepositoryClass,
@@ -32,6 +34,7 @@ import {
   EM,
   emKey,
   entityManagerRef,
+  migrateOnStartToken,
   migrationRunnerRef,
   mikroOrmInterceptorRef,
   mikroOrmOptionsToken,
@@ -172,6 +175,54 @@ export async function connectWithRetry(
 }
 
 /**
+ * `migrateOnStart` (FR-8, AD-8): applies pending migrations at boot, **guarded**. Called from a
+ * connection's `onStart` **after** it connects — never from the headless CLI path (`runMigrations`
+ * calls `init()` only, so `onStart` never fires there; the two paths are never conflated).
+ *
+ * Fail-closed and defense-in-depth: it does nothing unless `migrateOnStart` was opted in **and**
+ * `NODE_ENV` is explicitly `development`/`test` (a production/unknown/unset env is refused with a
+ * warning — the app still boots, it just never auto-migrates). Even then it applies only after
+ * `checkMigrationNeeded()` reports drift, so a current schema is a no-op. There is no advisory lock, so
+ * this must never run where replicas could race (documented).
+ */
+async function maybeMigrateOnStart(
+  orm: MikroORM,
+  migrateOnStart: boolean,
+  connectionName: string,
+  log: Logger
+): Promise<void> {
+  if (!migrateOnStart) return;
+  if (!isDevelopmentOrTest()) {
+    log.warn(
+      `migrateOnStart is enabled for connection "${connectionName}" but NODE_ENV is not "development" ` +
+        `or "test" (it is "${
+          process.env.NODE_ENV ?? "unset"
+        }") — skipping. Migrations are never ` +
+        `applied as a side effect of a production boot; apply them explicitly (spine-migrate migration:up).`,
+      CONTEXT
+    );
+    return;
+  }
+  const migrator = orm.getMigrator();
+  if (!(await migrator.checkMigrationNeeded())) {
+    log.debug(
+      `migrateOnStart: connection "${connectionName}" schema is current; nothing to apply.`,
+      CONTEXT
+    );
+    return;
+  }
+  const applied = await up(migrator);
+  log.info(
+    `migrateOnStart: applied ${
+      applied.length
+    } migration(s) on connection "${connectionName}": ${applied
+      .map((m) => m.name)
+      .join(", ")}`,
+    CONTEXT
+  );
+}
+
+/**
  * Internal per-registration feature module. `register()` returns it as a **`fresh`** DynamicModule, so
  * each call is an ISOLATED node (identity = the DynamicModule object, not this class): its repository
  * tokens are exported only to the importing module and do **not** accumulate on the shared connection
@@ -189,6 +240,8 @@ class MikroOrmRepositoriesModule {}
 const connectionSpecToken = new InjectionToken<{
   orm: MikroORM;
   retry: RetryPolicy;
+  name: string;
+  migrateOnStart: boolean;
 }>("mikro-orm.connection-spec");
 
 /**
@@ -202,13 +255,24 @@ class NamedMikroOrmConnection implements OnStart, OnStop {
   private connected = false;
 
   constructor(
-    private readonly spec: { orm: MikroORM; retry: RetryPolicy },
+    private readonly spec: {
+      orm: MikroORM;
+      retry: RetryPolicy;
+      name: string;
+      migrateOnStart: boolean;
+    },
     private readonly log: Logger
   ) {}
 
   async onStart(): Promise<void> {
     await connectWithRetry(this.spec.orm, this.spec.retry, this.log);
     this.connected = true;
+    await maybeMigrateOnStart(
+      this.spec.orm,
+      this.spec.migrateOnStart,
+      this.spec.name,
+      this.log
+    );
   }
 
   async onStop(): Promise<void> {
@@ -286,7 +350,9 @@ export const connectionNode = (name: string): DynamicModule => {
  * export class AppModule {}
  * ```
  */
-@Module({ inject: [MikroORM, loggerToken, retryPolicyToken] })
+@Module({
+  inject: [MikroORM, loggerToken, retryPolicyToken, migrateOnStartToken],
+})
 export class MikroOrmModule implements OnStart, OnStop {
   // Whether onStart actually connected. onStop pairs with onInit (not onStart), so it also runs on a
   // failed boot — when connectWithRetry threw and the ORM was never connected (ADR 0010).
@@ -295,12 +361,19 @@ export class MikroOrmModule implements OnStart, OnStop {
   constructor(
     private readonly orm: MikroORM,
     private readonly log: Logger,
-    private readonly retry: RetryPolicy
+    private readonly retry: RetryPolicy,
+    private readonly migrateOnStart: boolean
   ) {}
 
   async onStart(): Promise<void> {
     await connectWithRetry(this.orm, this.retry, this.log);
     this.connected = true;
+    await maybeMigrateOnStart(
+      this.orm,
+      this.migrateOnStart,
+      DEFAULT_CONNECTION,
+      this.log
+    );
   }
 
   async onStop(): Promise<void> {
@@ -345,6 +418,9 @@ export class MikroOrmModule implements OnStart, OnStop {
     // into migrations — so `orm.getMigrator()` is always safe to call and a non-migrating connection
     // stays zero-cost (NFR-4).
     const hasMigrations = ormOptions.migrations !== undefined;
+    // Spine-only boot-run flag (stripped from the MikroORM options by resolveMigrationsOptions); the
+    // connection's onStart reads it and applies it guarded (dev/test only, drift-checked).
+    const migrateOnStart = Boolean(ormOptions.migrations?.migrateOnStart);
     let resolvedOrmOptions: Options = ormOptions;
     if (ormOptions.migrations) {
       const migrator = loadMigratorExtension();
@@ -399,7 +475,12 @@ export class MikroOrmModule implements OnStart, OnStop {
           // Feeds the fresh node's own lifecycle instance (see NamedMikroOrmConnection).
           provide: connectionSpecToken,
           inject: [ormRef],
-          factory: (orm: MikroORM) => ({ orm, retry: resolvedRetry }),
+          factory: (orm: MikroORM) => ({
+            orm,
+            retry: resolvedRetry,
+            name,
+            migrateOnStart,
+          }),
         },
         // A per-connection `MigrationRunner`, only when this connection declares migrations (NFR-4).
         ...(hasMigrations
@@ -433,6 +514,7 @@ export class MikroOrmModule implements OnStart, OnStop {
       providers: [
         { provide: mikroOrmOptionsToken, value: resolvedOrmOptions },
         { provide: retryPolicyToken, value: resolvedRetry },
+        { provide: migrateOnStartToken, value: migrateOnStart },
         mikroOrmProvider,
         entityManagerProvider,
         {
