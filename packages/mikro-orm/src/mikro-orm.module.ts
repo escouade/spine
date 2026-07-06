@@ -233,7 +233,10 @@ class NamedMikroOrmConnection implements OnStart, OnStop {
  * even when imported at the app root, on a transport, and by a feature's `register()`.
  */
 const connectionNodes = new Map<string, DynamicModule>();
-const connectionNode = (name: string): DynamicModule => {
+// Exported (package-internal, not on the public barrel) so the headless migration command module can
+// import the SAME memoized node a named connection's `configure({ name })` filled — sharing the one
+// `MikroORM` instance by object identity (Story 2.5, AD-3/AD-4).
+export const connectionNode = (name: string): DynamicModule => {
   let node = connectionNodes.get(name);
   if (!node) {
     node = {

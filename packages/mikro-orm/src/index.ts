@@ -39,6 +39,10 @@ export type {
   VersionFlags,
 } from "./migrations";
 
+// Headless composition-root: run a migration verb against the app's real module graph without binding
+// a transport (FR-4, FR-7, AD-3). Resolves on success, rejects on failure, never calls process.exit.
+export { runMigrations } from "./cli/run-migrations";
+
 // Re-export the MikroORM primitives a consumer needs (entity/repository/manager), so an app can define
 // entities and inject the manager depending on @spinejs/mikro-orm alone. Identity-preserving: these are
 // the same classes @mikro-orm/core exports, so the DI tokens match whichever import path is used.
