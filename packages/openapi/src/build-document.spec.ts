@@ -245,7 +245,15 @@ describe("buildOpenApiDocument", () => {
     const c = components(doc);
     expect(c.ErrorResponse).toEqual({
       type: "object",
-      properties: { ok: { const: false }, code: { type: "string" } },
+      properties: {
+        ok: { const: false },
+        code: { type: "string" },
+        // Optional semantic failure meta (gateway-core `FailureMeta`) — additive, never required.
+        meta: {
+          type: "object",
+          properties: { retryAfterMs: { type: "number" } },
+        },
+      },
       required: ["ok", "code"],
     });
     // Deduped: never suffixed, even though two routes declare a 404 error.

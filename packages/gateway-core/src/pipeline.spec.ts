@@ -165,6 +165,31 @@ describe("DispatchPipeline", () => {
     expect(envelope).toEqual({ ok: false, code: "UNAUTHORIZED" });
   });
 
+  it("preserves an interceptor's failure envelope `meta` through the chain (FailureMeta seam)", async () => {
+    const rejecting: GatewayInterceptor = {
+      intercept: async () => ({
+        ok: false,
+        code: "TOO_MANY_REQUESTS",
+        meta: { retryAfterMs: 1500 },
+      }),
+    };
+    const invoke = vi.fn();
+
+    const envelope = await pipeline([rejecting]).dispatch(
+      target({ invoke }),
+      {},
+      undefined
+    );
+
+    // The semantic meta rides the envelope verbatim — nothing strips or rewraps it.
+    expect(envelope).toEqual({
+      ok: false,
+      code: "TOO_MANY_REQUESTS",
+      meta: { retryAfterMs: 1500 },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("maps an async interceptor rejection to an error envelope", async () => {
     const rejecting: GatewayInterceptor = {
       intercept: () => Promise.reject(new Error("async boom")),

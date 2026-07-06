@@ -443,6 +443,14 @@
           },
           "code": {
             "type": "string"
+          },
+          "meta": {
+            "type": "object",
+            "properties": {
+              "retryAfterMs": {
+                "type": "number"
+              }
+            }
           }
         },
         "required": [
