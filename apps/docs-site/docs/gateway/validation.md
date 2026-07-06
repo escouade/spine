@@ -72,10 +72,11 @@ Any schema library exposing a `parse` method satisfies this structural interface
 
 ### The Zod adapter
 
-The reference `ZodValidator` normalizes a `ZodError` into a `ValidationError`:
+The reference `ZodValidator` normalizes a zod error into a `ValidationError`. It catches both surfaces shipped by zod 3.25+ — classic v3 (`ZodError`) and `zod/v4` (`$ZodError`) — so schemas authored with either surface produce the same `ValidationError`:
 
 ```typescript
 import { ZodError } from "zod";
+import { $ZodError } from "zod/v4/core";
 import {
   ParseableSchema,
   ValidationError,
@@ -87,10 +88,13 @@ export class ZodValidator implements Validator {
     try {
       return schema.parse(input);
     } catch (err) {
-      if (err instanceof ZodError) {
+      if (err instanceof ZodError || err instanceof $ZodError) {
         const detail = err.issues
           .map(
-            (issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`
+            (issue) =>
+              `${issue.path.map(String).join(".") || "(root)"}: ${
+                issue.message
+              }`
           )
           .join("; ");
         throw new ValidationError(detail);
@@ -100,6 +104,8 @@ export class ZodValidator implements Validator {
   }
 }
 ```
+
+The `$ZodError` check matches by trait (`Symbol.hasInstance`), so it also catches errors thrown by a duplicate zod v4 copy elsewhere in your dependency tree.
 
 The gateway pipeline catches the `ValidationError` and the `ErrorMapper` converts it to the transport's error code (e.g. `'INVALID_INPUT'`).
 

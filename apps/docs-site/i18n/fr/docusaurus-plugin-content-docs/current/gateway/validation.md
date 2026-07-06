@@ -72,10 +72,11 @@ Toute bibliothèque de schéma exposant une méthode `parse` satisfait cette int
 
 ### L'adaptateur Zod
 
-Le `ZodValidator` de référence normalise une `ZodError` en `ValidationError` :
+Le `ZodValidator` de référence normalise une erreur zod en `ValidationError`. Il attrape les deux surfaces livrées par zod 3.25+ — v3 classique (`ZodError`) et `zod/v4` (`$ZodError`) — de sorte que les schémas écrits avec l'une ou l'autre surface produisent la même `ValidationError` :
 
 ```typescript
 import { ZodError } from "zod";
+import { $ZodError } from "zod/v4/core";
 import {
   ParseableSchema,
   ValidationError,
@@ -87,10 +88,13 @@ export class ZodValidator implements Validator {
     try {
       return schema.parse(input);
     } catch (err) {
-      if (err instanceof ZodError) {
+      if (err instanceof ZodError || err instanceof $ZodError) {
         const detail = err.issues
           .map(
-            (issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`
+            (issue) =>
+              `${issue.path.map(String).join(".") || "(root)"}: ${
+                issue.message
+              }`
           )
           .join("; ");
         throw new ValidationError(detail);
@@ -100,6 +104,8 @@ export class ZodValidator implements Validator {
   }
 }
 ```
+
+Le test `$ZodError` matche par trait (`Symbol.hasInstance`) : il attrape donc aussi les erreurs levées par une copie zod v4 dupliquée ailleurs dans votre arbre de dépendances.
 
 Le pipeline de la gateway rattrape la `ValidationError` et l'`ErrorMapper` la convertit vers le code d'erreur du transport (par ex. `'INVALID_INPUT'`).
 
