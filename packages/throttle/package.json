@@ -1,0 +1,124 @@
+{
+  "name": "@spinejs/throttle",
+  "version": "0.1.3",
+  "description": "Rate-limiting battery for SpineJS: exact sliding-window policies enforced as a gateway interceptor, transport-blind core with HTTP and electron-ipc presets.",
+  "keywords": [
+    "spinejs",
+    "rate-limit",
+    "throttle",
+    "sliding-window",
+    "gateway",
+    "interceptor"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/escouade/spine.git",
+    "directory": "packages/throttle"
+  },
+  "homepage": "https://github.com/escouade/spine/tree/main/packages/throttle#readme",
+  "bugs": "https://github.com/escouade/spine/issues",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./http": {
+      "types": "./src/http.ts",
+      "default": "./src/http.ts"
+    },
+    "./electron-ipc": {
+      "types": "./src/electron-ipc.ts",
+      "default": "./src/electron-ipc.ts"
+    },
+    "./testing": {
+      "types": "./src/testing.ts",
+      "default": "./src/testing.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepack": "node ../../scripts/ensure-yarn-pack.cjs"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        },
+        "require": {
+          "types": "./dist/index.d.cts",
+          "default": "./dist/index.cjs"
+        }
+      },
+      "./http": {
+        "import": {
+          "types": "./dist/http.d.ts",
+          "default": "./dist/http.js"
+        },
+        "require": {
+          "types": "./dist/http.d.cts",
+          "default": "./dist/http.cjs"
+        }
+      },
+      "./electron-ipc": {
+        "import": {
+          "types": "./dist/electron-ipc.d.ts",
+          "default": "./dist/electron-ipc.js"
+        },
+        "require": {
+          "types": "./dist/electron-ipc.d.cts",
+          "default": "./dist/electron-ipc.cjs"
+        }
+      },
+      "./testing": {
+        "import": {
+          "types": "./dist/testing.d.ts",
+          "default": "./dist/testing.js"
+        },
+        "require": {
+          "types": "./dist/testing.d.cts",
+          "default": "./dist/testing.cjs"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@spinejs/core": "workspace:^",
+    "@spinejs/gateway-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "@hono/node-server": "^2.0.6",
+    "@spinejs/electron-ipc-gateway": "workspace:^",
+    "@spinejs/http-gateway": "workspace:^"
+  },
+  "peerDependenciesMeta": {
+    "@hono/node-server": {
+      "optional": true
+    },
+    "@spinejs/electron-ipc-gateway": {
+      "optional": true
+    },
+    "@spinejs/http-gateway": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@hono/node-server": "^2.0.6",
+    "@spinejs/electron-ipc-gateway": "workspace:^",
+    "@spinejs/http-gateway": "workspace:^",
+    "zod": "^3.25.76"
+  }
+}
