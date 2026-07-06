@@ -12,7 +12,12 @@ import {
   ContextFactory,
   UnauthorizedError,
 } from "@spinejs/gateway-core";
-import type { HttpAddress, HttpBaseContext, HttpRaw } from "./http-base.types";
+import {
+  readResponseHeadersBag,
+  type HttpAddress,
+  type HttpBaseContext,
+  type HttpRaw,
+} from "./http-base.types";
 import type { HttpRouteMeta } from "./http-routes";
 import type { SseEvent } from "./sse-hub";
 
@@ -91,10 +96,13 @@ export class HttpGateway<
       const status = envelope.ok
         ? successStatus ?? 200
         : this.statusMapper(envelope.code);
-      // Route headers apply only on success and win over the default `Content-Type`.
+      // Merge order (AD-8): gateway defaults < per-request headers bag < route `meta.headers`.
+      // The bag applies on success AND error paths; static route headers stay success-only.
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
+      const bag = readResponseHeadersBag(ctx);
+      if (bag) Object.assign(headers, bag);
       if (envelope.ok && meta?.headers) Object.assign(headers, meta.headers);
       return new Response(JSON.stringify(envelope), { status, headers });
     });

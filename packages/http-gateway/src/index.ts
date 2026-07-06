@@ -5,6 +5,12 @@ export type {
   HttpBaseContext,
   HttpMethod,
   HttpRaw,
+  ResponseHeadersBag,
+} from "./http-base.types";
+export {
+  responseHeadersBag,
+  responseHeadersOf,
+  readResponseHeadersBag,
 } from "./http-base.types";
 export { HttpGatewayModule } from "./http-gateway.module";
 export { get, post, put, patch, del, sse, httpRoutes } from "./http-routes";
