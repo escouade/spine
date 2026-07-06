@@ -124,3 +124,30 @@ export class PublicApiController {
   );
 }
 ```
+
+## Déclarer un schéma de sécurité
+
+Un guard peut déclarer le schéma de sécurité OpenAPI qu'il applique en portant un `static openapiSecurity = { name, scheme }`. La battery `@spinejs/openapi` le lit sur les guards de chaque route et en dérive toute la surface de sécurité — aucune config de sécurité nulle part :
+
+```typescript
+// src/security/bearer.guard.ts
+import { Guard } from "@spinejs/gateway-core";
+import type { AppContext } from "../gateway/app-context";
+
+export class BearerGuard implements Guard<AppContext> {
+  static openapiSecurity = {
+    name: "bearerAuth",
+    scheme: { type: "http", scheme: "bearer" },
+  };
+
+  canActivate(ctx: AppContext): boolean {
+    return ctx.token !== null;
+  }
+}
+```
+
+Toute route gardée par `BearerGuard` reçoit `security: [{ bearerAuth: [] }]`, et le document gagne une entrée `components.securitySchemes.bearerAuth`. Un guard **sans** ce static ne contribue aucun schéma (il garde quand même à l'exécution). Deux guards déclarant le même `name` avec un `scheme` **différent** font échouer le build immédiatement, si bien qu'un nom de schéma désigne toujours une seule chose dans le document.
+
+:::note Documentation seulement
+`openapiSecurity` ne change jamais ce que le guard applique à l'exécution — `canActivate` est la barrière. Le static indique seulement au document généré quel schéma ce guard représente.
+:::

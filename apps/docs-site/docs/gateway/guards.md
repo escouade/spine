@@ -124,3 +124,30 @@ export class PublicApiController {
   );
 }
 ```
+
+## Declaring a security scheme
+
+A guard can declare the OpenAPI security scheme it enforces by carrying a `static openapiSecurity = { name, scheme }`. The `@spinejs/openapi` battery reads it off each route's guards and derives the whole security surface — no security config anywhere:
+
+```typescript
+// src/security/bearer.guard.ts
+import { Guard } from "@spinejs/gateway-core";
+import type { AppContext } from "../gateway/app-context";
+
+export class BearerGuard implements Guard<AppContext> {
+  static openapiSecurity = {
+    name: "bearerAuth",
+    scheme: { type: "http", scheme: "bearer" },
+  };
+
+  canActivate(ctx: AppContext): boolean {
+    return ctx.token !== null;
+  }
+}
+```
+
+Any route guarded by `BearerGuard` gets `security: [{ bearerAuth: [] }]`, and the document gains one `components.securitySchemes.bearerAuth` entry. A guard **without** the static contributes no scheme (it still guards at runtime). Two guards declaring the same `name` with a **different** `scheme` fail the build fast, so a scheme name always means one thing across the document.
+
+:::note Documentation-only
+`openapiSecurity` never changes what the guard enforces at runtime — `canActivate` is the gate. The static only tells the generated document which scheme this guard represents.
+:::
