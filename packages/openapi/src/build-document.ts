@@ -216,12 +216,31 @@ function buildSecurity(
   return [requirement];
 }
 
-/** Structural equality for two security schemes (stable key order from the guard's static literal). */
+/**
+ * Structural equality for two security schemes, **order-insensitive**: two guards declaring the same
+ * scheme with its properties in a different literal order must dedup, not raise a false conflict.
+ */
 function schemesEqual(
   a: SecuritySchemeObject,
   b: SecuritySchemeObject
 ): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return canonicalJson(a) === canonicalJson(b);
+}
+
+/** Canonical JSON for a value: object keys sorted recursively, so key order never affects equality. */
+function canonicalJson(value: JsonValue): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const obj = value as { [key: string]: JsonValue };
+    const body = Object.keys(obj)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(obj[key])}`)
+      .join(",");
+    return `{${body}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /**
