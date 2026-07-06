@@ -15,6 +15,7 @@
     "packages/http-gateway",
     "packages/openapi",
     "packages/scheduler",
+    "packages/throttle",
     "apps/docs-site",
     "examples/cls-request-context",
     "examples/http-routes",
