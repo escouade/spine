@@ -1,9 +1,11 @@
 import { InjectionToken, Module } from "@spinejs/core";
-import type { DynamicModule, OnInit, OnStop } from "@spinejs/core";
-import type { GatewayContext } from "@spinejs/gateway-core";
+import type { DynamicModule, OnInit, OnStart, OnStop } from "@spinejs/core";
+import type { GatewayContext, ProviderAdapter } from "@spinejs/gateway-core";
+import { toProvider } from "@spinejs/gateway-core";
 import { validatePolicies, ThrottleConfigError } from "./policy-validation";
 import { InMemoryThrottleStore } from "./memory-store";
 import { ThrottleInterceptor } from "./interceptor";
+import { validateRouteThrottleMeta } from "./engine";
 import type { ResolvedThrottleConfig } from "./engine";
 import type {
   Clock,
@@ -13,6 +15,28 @@ import type {
   ThrottlePolicy,
   ThrottleStore,
 } from "./throttle.types";
+
+/**
+ * The minimal readonly view of a bound route the boot-time walk needs: only its opaque `meta` (the
+ * `meta.throttle` namespace, AD-3). Both `HttpGateway.routes` and `ElectronIpcGateway.routes`
+ * (readonly `LoadedRoute[]`) satisfy it structurally.
+ */
+export interface RouteSnapshot {
+  meta?: unknown;
+}
+
+/**
+ * A provider of a transport's readonly route snapshot (NFR-3, Story 2.2). Wire it to the gateway
+ * whose `interceptors` slot holds this throttle instance — the module's start hook walks the routes
+ * it returns and validates every `meta.throttle` spec, so a bad route-inline policy fails **boot**
+ * (with the route/channel named) rather than the first dispatch:
+ *
+ *   ThrottleModule.configure({
+ *     policies: { ... },
+ *     routes: { inject: [HttpGateway], factory: (gw: HttpGateway) => () => gw.routes },
+ *   })
+ */
+export type RouteSnapshotSource = () => readonly RouteSnapshot[];
 
 /** Options of one `ThrottleModule.configure()` call (FR-2). */
 export interface ThrottleModuleOptions {
@@ -38,6 +62,14 @@ export interface ThrottleModuleOptions {
   clock?: Clock;
   /** Instance name for multi-gateway apps — each name is a fully isolated instance (AD-7). */
   name?: string;
+  /**
+   * Boot-time route-inline validation (NFR-3, Story 2.2): a provider yielding the gateway's
+   * readonly route snapshot. The module's start hook walks it and validates every `meta.throttle`
+   * spec with the same rules as `configure`-level validation, so a bad inline policy fails boot,
+   * never the first dispatch. Omit it to keep the interim request-path guard only (see
+   * {@link RouteSnapshotSource}).
+   */
+  routes?: ProviderAdapter<RouteSnapshotSource>;
 }
 
 // Internal per-instance tokens: each `configure()` returns a `fresh` module node providing its own
@@ -45,6 +77,12 @@ export interface ThrottleModuleOptions {
 const storeToken = new InjectionToken<ThrottleStore>("throttle.store");
 const ownsStoreToken = new InjectionToken<boolean>("throttle.owns-store");
 const instanceNameToken = new InjectionToken<string>("throttle.instance-name");
+const configToken = new InjectionToken<ResolvedThrottleConfig>(
+  "throttle.config"
+);
+const routesSourceToken = new InjectionToken<RouteSnapshotSource>(
+  "throttle.routes-source"
+);
 
 // Instance names claimed by the currently-booted modules of THIS app (added on `onInit`, released on
 // `onStop`). Two `configure()` calls with the same name (incl. two implicit `default`s) would both
@@ -98,13 +136,21 @@ export function throttleInterceptorRef(
  * gateway (e.g. a shared Redis-backed store).
  */
 @Module({
-  inject: [storeToken, ownsStoreToken, instanceNameToken] as const,
+  inject: [
+    storeToken,
+    ownsStoreToken,
+    instanceNameToken,
+    configToken,
+    routesSourceToken,
+  ] as const,
 })
-export class ThrottleModule implements OnInit, OnStop {
+export class ThrottleModule implements OnInit, OnStart, OnStop {
   constructor(
     private readonly store: ThrottleStore,
     private readonly ownsStore: boolean,
-    private readonly instanceName: string
+    private readonly instanceName: string,
+    private readonly config: ResolvedThrottleConfig,
+    private readonly routesSource: RouteSnapshotSource
   ) {}
 
   /** Claims this instance's name for the app, failing loud if another instance already holds it (AD-7). */
@@ -117,6 +163,24 @@ export class ThrottleModule implements OnInit, OnStop {
       );
     }
     activeInstanceNames.add(this.instanceName);
+  }
+
+  /**
+   * Boot-time route-inline validation (NFR-3, Story 2.2). Runs after every module's `onInit` (so all
+   * feature modules have registered their routes on the gateway), walks the wired transport route
+   * snapshot and validates every `meta.throttle` spec with the SAME rules as `configure`-level
+   * validation. An invalid inline spec (e.g. `'ip'` on IPC, a bad `limit`) fails the app start with
+   * the route/channel named — reconciling the engine's interim request-path guard by catching it
+   * pre-dispatch. No `routes` provider wired → an empty snapshot → the request-path guard stands.
+   */
+  onStart(): void {
+    for (const route of this.routesSource()) {
+      validateRouteThrottleMeta(
+        route.meta,
+        this.config.policies,
+        this.config.keySources
+      );
+    }
   }
 
   /** Releases the name claim and disposes the owned default store (its unref'd sweep) when the app stops. */
@@ -156,6 +220,14 @@ export class ThrottleModule implements OnInit, OnStop {
         },
         { provide: ownsStoreToken, value: options.store === undefined },
         { provide: instanceNameToken, value: name },
+        { provide: configToken, value: config },
+        // The route-snapshot source drives the boot walk (NFR-3). Default: no snapshot wired → an
+        // empty walk (the engine's request-path guard still fires). The app opts into boot-time
+        // validation by wiring `routes` to its gateway (`() => gateway.routes`).
+        toProvider(
+          routesSourceToken,
+          options.routes ?? { value: (): readonly RouteSnapshot[] => [] }
+        ),
         {
           provide: throttleInterceptorRef(name),
           inject: [storeToken] as const,

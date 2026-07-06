@@ -314,12 +314,11 @@ export class ThrottleEngine {
   }
 
   /**
-   * Parses and validates a route's `meta.throttle` (cached per meta object). `skip`/`override` names
-   * are checked against the configured defaults, an `override` re-scoping a gateway default is
-   * rejected, merged override values are validated, and route-inline policies get their synthesized
-   * identity `routeId#index` and pass the same rules as `configure`-level validation. Throws
-   * {@link ThrottleConfigError} on any violation (interim request-path enforcement; the boot-time
-   * walk of transport route snapshots is Story 2.2).
+   * Parses a route's `meta.throttle` into an enforceable spec (cached per meta object). The spec is
+   * validated with {@link validateRouteThrottleMeta} first (the same rules as `configure`-level
+   * validation), so an invalid inline policy / `skip` / `override` throws {@link ThrottleConfigError}
+   * — an interim request-path guard reconciled by the Story 2.2 boot-time walk of transport route
+   * snapshots (which now catches the same violations pre-dispatch).
    */
   private parseSpec(routeMeta: unknown): ParsedRouteSpec {
     const raw = readThrottleRouteMeta(routeMeta);
@@ -328,48 +327,19 @@ export class ThrottleEngine {
     const cached = this.specCache.get(raw);
     if (cached) return cached;
 
+    // Single source of truth for the boot walk and the request path (validated once per meta object).
+    // Pass the original route `meta` (with its `.throttle` namespace), not the unwrapped `raw`.
+    validateRouteThrottleMeta(
+      routeMeta,
+      this.config.policies,
+      this.config.keySources
+    );
+
     const routeId = raw.routeId ?? UNSTAMPED_ROUTE_ID;
-    const wired = Object.keys(this.config.keySources);
-
-    for (const name of raw.skip ?? []) {
-      if (!(name in this.config.policies)) {
-        throw new ThrottleConfigError(
-          name,
-          "`skip` names a policy that is not a configured gateway default — the route would " +
-            "enforce a policy the author believes is exempt"
-        );
-      }
-    }
-    for (const [name, override] of Object.entries(raw.override ?? {})) {
-      const base = this.config.policies[name];
-      if (!base) {
-        throw new ThrottleConfigError(
-          name,
-          "`override` names a policy that is not a configured gateway default"
-        );
-      }
-      if (base.scope === "gateway") {
-        throw new ThrottleConfigError(
-          name,
-          "cannot `override` a `scope: 'gateway'` default per-route — an override is enforced " +
-            "route-scoped, which would silently detach the route from the shared gateway quota. " +
-            "Declare a separate route-inline policy instead"
-        );
-      }
-      // The merged policy is what actually runs — validate IT (an override of `limit: 0` or a
-      // `keyBy` typo would otherwise slip past all boot checks and permanently fail closed).
-      validatePolicy(
-        name,
-        { ...base, ...override },
-        { routeInline: true, keySources: wired }
-      );
-    }
-
-    const inline = (raw.policies ?? []).map((policy, index) => {
-      const id = `${routeId}#${index}`;
-      validatePolicy(id, policy, { routeInline: true, keySources: wired });
-      return { id, policy };
-    });
+    const inline = (raw.policies ?? []).map((policy, index) => ({
+      id: `${routeId}#${index}`,
+      policy,
+    }));
     const spec: ParsedRouteSpec = {
       routeId,
       unstamped: raw.routeId === undefined,
@@ -381,6 +351,70 @@ export class ThrottleEngine {
     this.specCache.set(raw, spec);
     return spec;
   }
+}
+
+/**
+ * Validates one route's `meta.throttle` spec against the same rules as `configure`-level validation
+ * (NFR-3): `skip`/`override` names must be configured gateway defaults, an `override` may not
+ * re-scope a `scope: 'gateway'` default, the merged override values must be valid, and each
+ * route-inline policy (identity `routeId#index`) must pass {@link validatePolicy}. Throws
+ * {@link ThrottleConfigError} naming the offending policy — never returns anything.
+ *
+ * Shared by the engine's request-path `parseSpec` and the throttle module's boot-time walk of the
+ * transport's readonly route snapshot (Story 2.2), so a bad inline spec (e.g. `'ip'` on IPC) fails
+ * boot with the route/channel named rather than the first dispatch. `routeMeta` is a route's opaque
+ * `meta` (the `meta.throttle` namespace is read off it); a route with no `meta.throttle` is a no-op.
+ */
+export function validateRouteThrottleMeta(
+  routeMeta: unknown,
+  policies: Record<string, ThrottlePolicy>,
+  keySources: Record<string, KeySelector>
+): void {
+  const raw = readThrottleRouteMeta(routeMeta);
+  if (raw === undefined) return;
+  const routeId = raw.routeId ?? UNSTAMPED_ROUTE_ID;
+  const wired = Object.keys(keySources);
+
+  for (const name of raw.skip ?? []) {
+    if (!(name in policies)) {
+      throw new ThrottleConfigError(
+        name,
+        "`skip` names a policy that is not a configured gateway default — the route would " +
+          "enforce a policy the author believes is exempt"
+      );
+    }
+  }
+  for (const [name, override] of Object.entries(raw.override ?? {})) {
+    const base = policies[name];
+    if (!base) {
+      throw new ThrottleConfigError(
+        name,
+        "`override` names a policy that is not a configured gateway default"
+      );
+    }
+    if (base.scope === "gateway") {
+      throw new ThrottleConfigError(
+        name,
+        "cannot `override` a `scope: 'gateway'` default per-route — an override is enforced " +
+          "route-scoped, which would silently detach the route from the shared gateway quota. " +
+          "Declare a separate route-inline policy instead"
+      );
+    }
+    // The merged policy is what actually runs — validate IT (an override of `limit: 0` or a
+    // `keyBy` typo would otherwise slip past all boot checks and permanently fail closed).
+    validatePolicy(
+      name,
+      { ...base, ...override },
+      { routeInline: true, keySources: wired }
+    );
+  }
+
+  (raw.policies ?? []).forEach((policy, index) => {
+    validatePolicy(`${routeId}#${index}`, policy, {
+      routeInline: true,
+      keySources: wired,
+    });
+  });
 }
 
 /** Reads the namespaced `meta.throttle` off an opaque route meta (the only key the battery reads — AD-3). */

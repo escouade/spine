@@ -1,0 +1,202 @@
+// Story 2.2 — boot-time walk of the transport route snapshots (NFR-3 complete). The throttle
+// module's start hook walks the wired gateway route snapshot and validates every `meta.throttle`
+// spec with the SAME rules as configure-level validation, so a bad route-inline spec fails BOOT with
+// the route/channel named — asserted on BOTH transports (HTTP verb helpers + IPC `handle()`).
+import "./http"; // loads the http-gateway `throttle` augmentation
+import "./electron-ipc"; // loads the electron-ipc-gateway `throttle` augmentation
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { App, Module } from "@spinejs/core";
+import type { Logger, ModuleEntry } from "@spinejs/core";
+import { Controller, getRoutes } from "@spinejs/gateway-core";
+import type {
+  Guard,
+  GuardConstructor,
+  GatewayContext,
+} from "@spinejs/gateway-core";
+import { post } from "@spinejs/http-gateway";
+import { handle } from "@spinejs/electron-ipc-gateway";
+import { ThrottleModule } from "./throttle.module";
+import type { RouteSnapshot } from "./throttle.module";
+import { ThrottleConfigError } from "./policy-validation";
+import type { ResolvedThrottleConfig } from "./engine";
+import type { ThrottleStore } from "./throttle.types";
+
+// `handle` pulls in `@spinejs/electron-ipc-gateway`'s index, which binds `ipcMain` at import.
+vi.mock("electron", () => ({ ipcMain: { handle: () => {} } }));
+
+const noGuards = new Map<GuardConstructor, Guard<GatewayContext>>();
+const snapshotOf = (controller: object): RouteSnapshot[] =>
+  getRoutes(controller, noGuards).map((r) => ({ meta: r.meta }));
+
+// onStart never touches the store, so a minimal stub is enough (no timers to leak).
+const noopStore: ThrottleStore = {
+  consume: async () => ({ accepted: true, totalHits: 1, resetMs: 0 }),
+};
+
+const makeConfig = (
+  overrides: Partial<ResolvedThrottleConfig> = {}
+): ResolvedThrottleConfig => ({
+  name: "default",
+  policies: {},
+  keySources: {},
+  emitRawKey: false,
+  ...overrides,
+});
+
+const moduleWalking = (
+  snapshot: RouteSnapshot[],
+  config = makeConfig()
+): ThrottleModule =>
+  new ThrottleModule(noopStore, false, config.name, config, () => snapshot);
+
+describe("boot walk of route-inline throttle specs (Story 2.2, NFR-3)", () => {
+  it("fails boot on an HTTP verb-helper route with an unwired inline `keyBy` — names the route", () => {
+    @Controller({})
+    class LoginController {
+      login = post(
+        "/login",
+        { throttle: { policies: [{ limit: 1, windowMs: 1000, keyBy: "ip" }] } },
+        () => 0
+      );
+    }
+    const mod = moduleWalking(snapshotOf(new LoginController()));
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /POST \/login#0.*keyBy: 'ip'.*not wired/s
+    );
+  });
+
+  it("fails boot on an IPC `handle()` channel with an unwired inline `keyBy` — names the channel", () => {
+    @Controller({})
+    class CmdController {
+      run = handle(
+        "cmd:run",
+        { throttle: { policies: [{ limit: 1, windowMs: 1000, keyBy: "ip" }] } },
+        () => 0
+      );
+    }
+    const mod = moduleWalking(snapshotOf(new CmdController()));
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(/cmd:run#0.*keyBy: 'ip'.*not wired/s);
+  });
+
+  it("fails boot on a bad inline `limit` and on `skip`/`override` naming an unknown default", () => {
+    @Controller({})
+    class BadLimitController {
+      r = post(
+        "/bad",
+        {
+          throttle: {
+            policies: [{ limit: 0, windowMs: 1000, keyBy: () => "k" }],
+          },
+        },
+        () => 0
+      );
+    }
+    expect(() =>
+      moduleWalking(snapshotOf(new BadLimitController())).onStart()
+    ).toThrow(/`limit` must be a positive integer/);
+
+    @Controller({})
+    class BadSkipController {
+      r = post("/skip", { throttle: { skip: ["ghost"] } }, () => 0);
+    }
+    expect(() =>
+      moduleWalking(snapshotOf(new BadSkipController())).onStart()
+    ).toThrow(/`skip` names a policy that is not a configured gateway default/);
+  });
+
+  it("passes boot for a valid inline spec on both transports (wired source, positive limit)", () => {
+    const config = makeConfig({ keySources: { ip: () => "1.2.3.4" } });
+    @Controller({})
+    class OkHttp {
+      r = post(
+        "/ok",
+        { throttle: { policies: [{ limit: 5, windowMs: 1000, keyBy: "ip" }] } },
+        () => 0
+      );
+    }
+    @Controller({})
+    class OkIpc {
+      r = handle(
+        "cmd:ok",
+        { throttle: { policies: [{ limit: 5, windowMs: 1000, keyBy: "ip" }] } },
+        () => 0
+      );
+    }
+    expect(() =>
+      moduleWalking(snapshotOf(new OkHttp()), config).onStart()
+    ).not.toThrow();
+    expect(() =>
+      moduleWalking(snapshotOf(new OkIpc()), config).onStart()
+    ).not.toThrow();
+  });
+
+  it("walks an empty snapshot without error when no `routes` provider is wired", () => {
+    expect(() => moduleWalking([]).onStart()).not.toThrow();
+  });
+});
+
+// The start hook fires through a real App boot: a bad route-inline spec rejects `app.start()`.
+const silentLogger = {
+  info() {},
+  error() {},
+  warn() {},
+  debug() {},
+  verbose() {},
+  fatal() {},
+  exit: async () => {},
+} as unknown as Logger;
+const makeApp = (modules: ModuleEntry[]) =>
+  new App(modules, { logger: silentLogger, handleProcessExit: false });
+
+const SIGNALS = [
+  "uncaughtException",
+  "unhandledRejection",
+  "SIGINT",
+  "SIGTERM",
+] as const;
+let listenerSnapshot: Record<string, ((...args: unknown[]) => void)[]>;
+beforeEach(() => {
+  listenerSnapshot = {};
+  for (const signal of SIGNALS) {
+    listenerSnapshot[signal] = process
+      .listeners(signal as NodeJS.Signals)
+      .slice() as never;
+  }
+});
+afterEach(() => {
+  for (const signal of SIGNALS) {
+    for (const listener of process.listeners(signal as NodeJS.Signals)) {
+      if (!listenerSnapshot[signal].includes(listener as never)) {
+        process.removeListener(signal as NodeJS.Signals, listener as never);
+      }
+    }
+  }
+});
+
+describe("boot walk fires through a real App start (Story 2.2)", () => {
+  it("rejects app.start() when the wired route snapshot carries an invalid inline spec", async () => {
+    const badRoute = post(
+      "/login",
+      { throttle: { policies: [{ limit: 1, windowMs: 1000, keyBy: "ip" }] } },
+      () => 0
+    );
+
+    @Module({
+      imports: [
+        ThrottleModule.configure({
+          name: "boot-walk-app",
+          policies: {},
+          routes: { value: () => [{ meta: badRoute.meta }] },
+        }),
+      ],
+    })
+    class FeatureModule {}
+
+    const app = makeApp([FeatureModule]);
+    await app.init(); // onInit (name claim) succeeds — the spec is only invalid, not the config
+    await expect(app.start()).rejects.toThrow(ThrottleConfigError);
+    await app.stop().catch(() => {});
+  });
+});
