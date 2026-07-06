@@ -7,6 +7,8 @@ export type {
   OpenApiComponents,
   OpenApiDocument,
   OpenApiInfo,
+  OpenApiSecurity,
   OpenApiServer,
   OpenApiTag,
+  SecuritySchemeObject,
 } from "./types";
