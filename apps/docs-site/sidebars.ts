@@ -47,6 +47,7 @@ const sidebars: SidebarsConfig = {
         "extensions/cls",
         "extensions/scheduler",
         "extensions/mikro-orm",
+        "extensions/throttle",
       ],
     },
   ],
