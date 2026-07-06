@@ -104,7 +104,60 @@ The second argument is the route **options** object. For HTTP:
 | `successStatus` | `number`                   | HTTP status for a successful envelope. Defaults to `200` (e.g. `201` for a creation).             |
 | `headers`       | `Record<string, string>`   | Static response headers added on a successful envelope. Override the default `Content-Type`.      |
 
-IPC routes (`handle`) take a single `input` schema instead of the split sources (an IPC call carries one payload), plus the same `response` and `guards`.
+The remaining fields are **OpenAPI documentation** (`RouteDocMeta`) — every one is optional, carried in the marker `meta`, and **inert to dispatch**: they only annotate the document the `@spinejs/openapi` battery generates. Adding them never changes how a route runs.
+
+| Option        | Type                               | Description                                                                                    |
+| ------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `summary`     | `string`                           | Short operation summary.                                                                       |
+| `description` | `string`                           | Longer operation description.                                                                  |
+| `tags`        | `string[]`                         | Tags grouping the operation in the document.                                                   |
+| `operationId` | `string`                           | Explicit operationId; auto-derived from method + path when omitted.                            |
+| `deprecated`  | `boolean`                          | Marks the operation deprecated.                                                                |
+| `examples`    | `Record<string, unknown>`          | Success-response examples, keyed by name (each an OpenAPI `{ value }` example object).         |
+| `responses`   | `Record<number, RouteResponseDoc>` | Extra documented statuses beyond the success/error envelope (e.g. a mapped `404`, a `202`).    |
+| `hidden`      | `boolean`                          | **Opt-out**: exclude this route from the document. It still serves normally. Defaults `false`. |
+
+IPC routes (`handle`) take a single `input` schema instead of the split sources (an IPC call carries one payload), plus the same `response`, `guards`, and `RouteDocMeta` fields.
+
+### Documenting a route for OpenAPI
+
+These fields describe what the `@spinejs/openapi` battery emits for a route. Routes are documented **by default** — `hidden: true` is the deliberate opt-out for a route you want served but kept out of the public contract.
+
+```typescript
+// src/modules/report/report.controller.ts
+import { z } from "zod";
+import { Controller } from "@spinejs/gateway-core";
+import { get } from "@spinejs/http-gateway";
+
+@Controller({ inject: [ReportsStore] })
+export class ReportController {
+  constructor(private readonly reports: ReportsStore) {}
+
+  find = get(
+    "/reports/:id",
+    {
+      params: z.object({ id: z.string() }),
+      response: z.object({ id: z.string(), total: z.number() }),
+      summary: "Fetch a report",
+      tags: ["reports"],
+      // Statuses beyond the success/error envelope, each documented on its own:
+      responses: {
+        404: { code: "REPORT_NOT_FOUND", description: "No such report" },
+        202: {
+          schema: z.object({ jobId: z.string() }),
+          description: "Accepted",
+        },
+      },
+    },
+    ({ params }) => this.reports.find(params.id)
+  );
+
+  // Served, but kept out of the generated document.
+  debug = get("/reports/_debug", { hidden: true }, () => this.reports.debug());
+}
+```
+
+Each `responses` entry is a `RouteResponseDoc` — `{ code?, schema?, description? }`: `code` mirrors the error envelope's `code`, `schema` documents a body the status carries, `description` labels the status.
 
 ## Input validation with `ParseableSchema<T>`
 

@@ -104,7 +104,60 @@ Le second argument est l'objet d'**options** de la route. Pour HTTP :
 | `successStatus` | `number`                   | Statut HTTP pour une enveloppe en succès. Défaut `200` (ex. `201` pour une création).    |
 | `headers`       | `Record<string, string>`   | En-têtes de réponse statiques ajoutés en succès. Écrasent le `Content-Type` par défaut.  |
 
-Les routes IPC (`handle`) prennent un unique schéma `input` au lieu des sources découpées (un appel IPC porte une seule charge utile), plus les mêmes `response` et `guards`.
+Les champs restants sont de la **documentation OpenAPI** (`RouteDocMeta`) — tous optionnels, portés dans le `meta` du marker et **inertes au dispatch** : ils annotent seulement le document que la battery `@spinejs/openapi` génère. Les ajouter ne change jamais l'exécution d'une route.
+
+| Option        | Type                               | Description                                                                                   |
+| ------------- | ---------------------------------- | --------------------------------------------------------------------------------------------- |
+| `summary`     | `string`                           | Résumé court de l'opération.                                                                  |
+| `description` | `string`                           | Description longue de l'opération.                                                            |
+| `tags`        | `string[]`                         | Tags regroupant l'opération dans le document.                                                 |
+| `operationId` | `string`                           | operationId explicite ; auto-dérivé de méthode + chemin s'il est omis.                        |
+| `deprecated`  | `boolean`                          | Marque l'opération comme dépréciée.                                                           |
+| `examples`    | `Record<string, unknown>`          | Exemples de réponse en succès, indexés par nom (chacun un objet exemple OpenAPI `{ value }`). |
+| `responses`   | `Record<number, RouteResponseDoc>` | Statuts documentés au-delà de l'enveloppe succès/erreur (ex. un `404` mappé, un `202`).       |
+| `hidden`      | `boolean`                          | **Opt-out** : exclut la route du document. Elle sert toujours normalement. Défaut `false`.    |
+
+Les routes IPC (`handle`) prennent un unique schéma `input` au lieu des sources découpées (un appel IPC porte une seule charge utile), plus les mêmes `response`, `guards` et champs `RouteDocMeta`.
+
+### Documenter une route pour OpenAPI
+
+Ces champs décrivent ce que la battery `@spinejs/openapi` émet pour une route. Les routes sont documentées **par défaut** — `hidden: true` est l'opt-out délibéré pour une route qu'on veut servir mais garder hors du contrat public.
+
+```typescript
+// src/modules/report/report.controller.ts
+import { z } from "zod";
+import { Controller } from "@spinejs/gateway-core";
+import { get } from "@spinejs/http-gateway";
+
+@Controller({ inject: [ReportsStore] })
+export class ReportController {
+  constructor(private readonly reports: ReportsStore) {}
+
+  find = get(
+    "/reports/:id",
+    {
+      params: z.object({ id: z.string() }),
+      response: z.object({ id: z.string(), total: z.number() }),
+      summary: "Fetch a report",
+      tags: ["reports"],
+      // Statuses beyond the success/error envelope, each documented on its own:
+      responses: {
+        404: { code: "REPORT_NOT_FOUND", description: "No such report" },
+        202: {
+          schema: z.object({ jobId: z.string() }),
+          description: "Accepted",
+        },
+      },
+    },
+    ({ params }) => this.reports.find(params.id)
+  );
+
+  // Served, but kept out of the generated document.
+  debug = get("/reports/_debug", { hidden: true }, () => this.reports.debug());
+}
+```
+
+Chaque entrée de `responses` est un `RouteResponseDoc` — `{ code?, schema?, description? }` : `code` reflète le `code` de l'enveloppe d'erreur, `schema` documente un corps porté par ce statut, `description` étiquette le statut.
 
 ## Validation d'entrée avec `ParseableSchema<T>`
 
