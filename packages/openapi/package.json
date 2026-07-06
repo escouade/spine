@@ -51,5 +51,8 @@
     "@spinejs/gateway-core": "workspace:^",
     "@spinejs/http-gateway": "workspace:^",
     "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@seriousme/openapi-schema-validator": "^2.9.0"
   }
 }
