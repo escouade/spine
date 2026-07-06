@@ -559,6 +559,53 @@ await runner.up();
 const executed = await runner.list();
 ```
 
+### Reset a dev database (`fresh`)
+
+`migration:fresh` drops every table and re-applies all migrations from scratch — a fast local reset.
+It is **destructive** and fenced hard against production, so it requires two independent confirmations:
+
+```bash
+NODE_ENV=development spine-migrate migration:fresh --force-drop --module ./dist/app.module.js#AppModule
+```
+
+It refuses (before touching the database) unless **all** hold: `NODE_ENV` is explicitly `development` or
+`test`; the orthogonal `--force-drop` flag is present (the env label alone never authorizes a drop); and
+the target connection does **not** share a physical database with another configured connection (a drop
+can't be proven to target a distinct database). Each refusal names the next step.
+
+### Auto-migrate at start (`migrateOnStart`)
+
+For a local dev database that should stay current without a manual step, opt into `migrateOnStart` on the
+connection's `migrations` block — it applies pending migrations during app **start**:
+
+```ts
+MikroOrmModule.configure({
+  driver,
+  dbName,
+  entities: [User],
+  migrations: { path: "./migrations", migrateOnStart: true }, // dev convenience — default off
+});
+```
+
+It is guarded: it applies only after a `checkMigrationNeeded()` drift check (a current schema is a no-op),
+and **only** when `NODE_ENV` is explicitly `development`/`test`. In production (or an unknown/unset env) it
+warns and skips — the app boots normally, but **no migration is ever a side effect of a production boot**.
+
+:::warning No advisory lock
+Spine has no advisory lock. Never use `migrateOnStart` where several replicas could boot and race the
+same database. In production, apply migrations **explicitly** as a deploy step (`spine-migrate
+migration:up`), once, before the app rolls out — and confirm the DSN points at the database you intend.
+:::
+
+### Production safety, in one place
+
+- **No migration is ever applied as a side effect of a production boot.** `migrateOnStart` and `fresh`
+  refuse unless `NODE_ENV` is explicitly `development` or `test` — production, an unrecognized value, and
+  unset all refuse (fail-closed: the environment must _prove_ it is non-production).
+- **`fresh` needs a second, orthogonal confirmation** — `--force-drop` — in addition to a non-prod
+  `NODE_ENV`, and refuses a connection that shares a physical database with another.
+- **No advisory lock.** Apply migrations explicitly in CI/CD; never let multiple replicas race.
+
 ## Wiring it by hand (the factory) {#by-hand}
 
 `configure()` is not magic — it is a small, inspectable DI composition: a value provider for the
@@ -717,15 +764,16 @@ Any field omitted from `retry` falls back to its `DEFAULT_RETRY` value.
 `MigrationsOptions` (a curated view of MikroORM's `Options["migrations"]`) — every key is optional and
 Spine applies the defaults from _Migrations_ above:
 
-| Field                | Type           | Default                               | Meaning                                                    |
-| -------------------- | -------------- | ------------------------------------- | ---------------------------------------------------------- |
-| `path`               | `string`       | `./migrations` (`/<name>` when named) | Folder for this connection's migration files and snapshot. |
-| `tableName`          | `string`       | `mikro_orm_migrations`                | Tracking table recording executed migrations.              |
-| `emit`               | `"ts" \| "js"` | `"ts"`                                | Migration file format.                                     |
-| `snapshot`           | `boolean`      | `true`                                | Keep a committed schema snapshot for diffing.              |
-| `transactional`      | `boolean`      | `true`                                | Run each migration in a transaction.                       |
-| `allOrNothing`       | `boolean`      | `true`                                | Roll the whole batch back on any failure.                  |
-| `disableForeignKeys` | `boolean`      | _(off)_                               | SQLite table-rebuild escape hatch — see the warning above. |
+| Field                | Type           | Default                               | Meaning                                                                                |
+| -------------------- | -------------- | ------------------------------------- | -------------------------------------------------------------------------------------- |
+| `path`               | `string`       | `./migrations` (`/<name>` when named) | Folder for this connection's migration files and snapshot.                             |
+| `tableName`          | `string`       | `mikro_orm_migrations`                | Tracking table recording executed migrations.                                          |
+| `emit`               | `"ts" \| "js"` | `"ts"`                                | Migration file format.                                                                 |
+| `snapshot`           | `boolean`      | `true`                                | Keep a committed schema snapshot for diffing.                                          |
+| `transactional`      | `boolean`      | `true`                                | Run each migration in a transaction.                                                   |
+| `allOrNothing`       | `boolean`      | `true`                                | Roll the whole batch back on any failure.                                              |
+| `disableForeignKeys` | `boolean`      | _(off)_                               | SQLite table-rebuild escape hatch — see the warning above.                             |
+| `migrateOnStart`     | `boolean`      | `false`                               | Spine-only: apply pending migrations at app start, guarded (dev/test + drift-checked). |
 
 `@mikro-orm/migrations` (`^6`, same major as `@mikro-orm/core`) is an **optional peer dependency**:
 required only when a connection declares `migrations`.
@@ -741,6 +789,7 @@ required only when a connection declares `migrations`.
 | `migration:down`    | Roll back the most recent migration (or down to `--to`)          | `--to <version>`       |
 | `migration:list`    | Report executed migrations from the tracking table               | —                      |
 | `migration:pending` | Report migrations present but not yet executed                   | —                      |
+| `migration:fresh`   | Drop all tables and re-apply from scratch (dev reset)            | `--force-drop`         |
 
 | Flag                  | Meaning                                                                                       |
 | --------------------- | --------------------------------------------------------------------------------------------- |
@@ -749,10 +798,11 @@ required only when a connection declares `migrations`.
 | `--to <version>`      | Migrate `up`/`down` to a specific migration version instead of latest / one step.             |
 | `--blank`             | `create` an empty migration to hand-write.                                                    |
 | `--initial`           | `create` the first migration for an existing schema.                                          |
+| `--force-drop`        | Required by `fresh` — confirms the destructive drop (in addition to a non-prod `NODE_ENV`).   |
 
 Exit code: `0` on success, non-zero on failure (the failure is logged). Actionable errors: a missing
-`@mikro-orm/migrations`, an unknown `--connection` (lists the configured ones), and a config collision
-all name the next step.
+`@mikro-orm/migrations`, an unknown `--connection` (lists the configured ones), a config collision, and
+`fresh`'s `NODE_ENV`/`--force-drop`/shared-database refusals all name the next step.
 
 ### `runMigrations(AppModule, argv)`
 
