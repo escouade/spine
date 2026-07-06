@@ -21,7 +21,9 @@ export {
   mikroOrmRef,
   entityManagerRef,
   mikroOrmInterceptorRef,
+  migrationRunnerRef,
 } from "./mikro-orm.options";
+export { MigrationRunner } from "./mikro-orm.migration-runner";
 export type {
   MikroOrmModuleOptions,
   MigrationsOptions,

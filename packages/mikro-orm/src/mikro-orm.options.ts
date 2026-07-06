@@ -2,6 +2,8 @@ import { InjectionToken } from "@spinejs/core";
 import type { EntityManager, MikroORM, Options } from "@mikro-orm/core";
 // Type-only: avoids a runtime import cycle (mikro-orm.interceptor.ts imports EM from here).
 import type { MikroOrmInterceptor } from "./mikro-orm.interceptor";
+// Type-only: same reason — the runner imports the handlers, which import these option types back.
+import type { MigrationRunner } from "./mikro-orm.migration-runner";
 
 /**
  * The default connection's name. `configure(options)` with no `name` registers this one; it keeps the
@@ -44,6 +46,7 @@ export const WROTE = "@spinejs/mikro-orm:wrote";
 const mikroOrmRefs = new Map<string, InjectionToken<MikroORM>>();
 const entityManagerRefs = new Map<string, InjectionToken<EntityManager>>();
 const interceptorRefs = new Map<string, InjectionToken<MikroOrmInterceptor>>();
+const migrationRunnerRefs = new Map<string, InjectionToken<MigrationRunner>>();
 
 const memo = <T>(
   map: Map<string, InjectionToken<T>>,
@@ -80,6 +83,17 @@ export const mikroOrmInterceptorRef = (
   name: string
 ): InjectionToken<MikroOrmInterceptor> =>
   memo(interceptorRefs, name, `mikroOrmInterceptorRef(${name})`);
+
+/**
+ * Injection token for a named connection's `MigrationRunner` (FR-7). `migrationRunnerRef("analytics")`
+ * — drive that connection's migrations programmatically. `migrationRunnerRef("default")` resolves the
+ * same instance as the `MigrationRunner` class token (a pass-through provider, like `mikroOrmRef`).
+ * Provided **only** for a connection that declares a `migrations` block. See {@link mikroOrmRef}.
+ */
+export const migrationRunnerRef = (
+  name: string
+): InjectionToken<MigrationRunner> =>
+  memo(migrationRunnerRefs, name, `migrationRunnerRef(${name})`);
 
 /**
  * Startup connection-retry policy. A transient failure (a DB container still booting, a brief network
