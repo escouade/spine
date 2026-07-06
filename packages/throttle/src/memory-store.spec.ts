@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { InMemoryThrottleStore, monotonicClock } from "./memory-store";
+import { InMemoryThrottleStore } from "./memory-store";
 import type { Clock, ConsumeResult, StorePolicy } from "./throttle.types";
 
 /** Deterministic test clock (NFR-5): time only moves when the test says so. */
@@ -146,6 +146,9 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
 
     // Drive the sweep directly (the interval timer is the production trigger).
     (store as unknown as { sweep(): void }).sweep();
+    // Direct effect, asserted BEFORE any consume (which lazy-purges on access anyway): the sweep
+    // itself dropped the never-touched key from its policy space. Fails loud if `sweep()` no-ops.
+    expect(store.stats().p.size).toBe(0);
     // Observable effect: the key restarts a fresh window as if never seen.
     expect(await store.consume("gone", policy())).toEqual({
       accepted: true,
@@ -154,10 +157,21 @@ describe("InMemoryThrottleStore — exact sliding-window log (AD-4, Story 1.4)",
     });
   });
 
-  it("defaults to the monotonic clock", () => {
-    const before = monotonicClock.now();
-    const after = monotonicClock.now();
-    expect(after).toBeGreaterThanOrEqual(before);
+  it("defaults to the monotonic clock when none is injected (real time advances the window)", async () => {
+    // No `clock` option → the store must fall back to the real monotonic default. Observe it through
+    // behavior across a real time advance, not by asserting the platform's `performance.now()` monotonicity.
+    const store = new InMemoryThrottleStore({ sweepIntervalMs: 0 });
+    stores.push(store);
+
+    const first = await store.consume("k", policy({ windowMs: 10_000 }));
+    expect(first.resetMs).toBe(10_000); // oldest == now at the first hit
+    await new Promise((resolve) => setTimeout(resolve, 20)); // real time passes
+
+    const second = await store.consume("k", policy({ windowMs: 10_000 }));
+    expect(second.totalHits).toBe(2);
+    // A stuck/zero default clock would report the full window again; the real monotonic clock shrank it.
+    expect(second.resetMs).toBeLessThan(10_000);
+    expect(second.resetMs).toBeGreaterThan(5_000); // sane bound: ~20ms elapsed, not a wild jump
   });
 });
 
