@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod/v4";
-import { Controller, getRoutes } from "@spinejs/gateway-core";
+import { Controller, UseGuards, getRoutes } from "@spinejs/gateway-core";
 import type {
   GatewayContext,
   Guard,
@@ -548,6 +548,90 @@ describe("buildOpenApiDocument", () => {
     expect((op.responses as Record<string, Op>)["200"]).toMatchObject({
       content: { "text/event-stream": { schema: { type: "string" } } },
     });
+  });
+
+  it("dedups a scheme declared with a different key order instead of a false conflict", () => {
+    class GuardA implements Guard<GatewayContext> {
+      static openapiSecurity: OpenApiSecurity = {
+        name: "myAuth",
+        scheme: { type: "http", scheme: "bearer" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    class GuardB implements Guard<GatewayContext> {
+      // Same scheme, properties written in a different order — must not raise a conflict.
+      static openapiSecurity: OpenApiSecurity = {
+        name: "myAuth",
+        scheme: { scheme: "bearer", type: "http" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    @Controller({})
+    class TwoGuards {
+      a = get("/a", { guards: [GuardA] }, () => ({ ok: true }));
+      b = get("/b", { guards: [GuardB] }, () => ({ ok: true }));
+    }
+    const guardMap = new Map<GuardConstructor, Guard<GatewayContext>>([
+      [GuardA, new GuardA()],
+      [GuardB, new GuardB()],
+    ]);
+    const doc = docFromController(new TwoGuards(), guardMap);
+    expect(Object.keys(securitySchemes(doc) ?? {})).toEqual(["myAuth"]);
+    expect(paths(doc)["/a"].get.security).toEqual([{ myAuth: [] }]);
+    expect(paths(doc)["/b"].get.security).toEqual([{ myAuth: [] }]);
+  });
+
+  it("derives security from a controller-level @UseGuards guard (AD-9)", () => {
+    class ClassGuard implements Guard<GatewayContext> {
+      static openapiSecurity: OpenApiSecurity = {
+        name: "classAuth",
+        scheme: { type: "http", scheme: "bearer" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    @UseGuards(ClassGuard)
+    @Controller({})
+    class ClassSecured {
+      x = get("/x", {}, () => ({ ok: true }));
+    }
+    const guardMap = new Map<GuardConstructor, Guard<GatewayContext>>([
+      [ClassGuard, new ClassGuard()],
+    ]);
+    const doc = docFromController(new ClassSecured(), guardMap);
+    expect(paths(doc)["/x"].get.security).toEqual([{ classAuth: [] }]);
+    expect(securitySchemes(doc)?.classAuth).toEqual({
+      type: "http",
+      scheme: "bearer",
+    });
+  });
+
+  it("picks up a base guard's inherited static openapiSecurity on a subclass", () => {
+    class BaseGuard implements Guard<GatewayContext> {
+      static openapiSecurity: OpenApiSecurity = {
+        name: "baseAuth",
+        scheme: { type: "http", scheme: "bearer" },
+      };
+      canActivate() {
+        return true;
+      }
+    }
+    class SubGuard extends BaseGuard {}
+    @Controller({})
+    class SubSecured {
+      x = get("/x", { guards: [SubGuard] }, () => ({ ok: true }));
+    }
+    const guardMap = new Map<GuardConstructor, Guard<GatewayContext>>([
+      [SubGuard, new SubGuard()],
+    ]);
+    const doc = docFromController(new SubSecured(), guardMap);
+    expect(paths(doc)["/x"].get.security).toEqual([{ baseAuth: [] }]);
+    expect(securitySchemes(doc)?.baseAuth).toBeDefined();
   });
 
   it("does not surface author-provided examples at operation level", () => {
