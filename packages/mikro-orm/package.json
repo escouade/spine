@@ -1,6 +1,6 @@
 {
   "name": "@spinejs/mikro-orm",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "MikroORM integration for SpineJS: request-scoped EntityManager / unit-of-work via CLS.",
   "keywords": [
     "spinejs",

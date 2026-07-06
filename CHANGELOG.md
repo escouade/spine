@@ -1,3 +1,46 @@
+## 0.1.4 (2026-07-06)
+
+### 🚀 Features
+
+- **gateway-core:** envelope failure metadata seam (Story 1.1) ([6f41e9f](https://github.com/escouade/spine/commit/6f41e9f))
+- **http-gateway:** per-request response-headers bag (Story 1.2) ([48c9ed2](https://github.com/escouade/spine/commit/48c9ed2))
+- **mikro-orm:** pure-fn create migration handler (Story 2.1) ([355b9fe](https://github.com/escouade/spine/commit/355b9fe))
+- **mikro-orm:** pure-fn up/down/list/pending handlers (Story 2.2) ([e89dcf3](https://github.com/escouade/spine/commit/e89dcf3))
+- **mikro-orm:** pure-fn parseArgv command/flag parser (Story 2.3) ([3095eef](https://github.com/escouade/spine/commit/3095eef))
+- **mikro-orm:** injectable MigrationRunner with per-connection logging (Story 2.4) ([86062d4](https://github.com/escouade/spine/commit/86062d4))
+- **mikro-orm:** headless runMigrations composition-root + command module (Story 2.5) ([9e5a916](https://github.com/escouade/spine/commit/9e5a916))
+- **mikro-orm:** spine-migrate bin mapping the result to an exit code (Story 2.6) ([0a371bf](https://github.com/escouade/spine/commit/0a371bf))
+- **mikro-orm:** migration:fresh — dev-only reset with --force-drop (Story 3.1) ([3f858c3](https://github.com/escouade/spine/commit/3f858c3))
+- **mikro-orm:** migrateOnStart — dev-only guarded boot-run (Story 3.2) ([f856976](https://github.com/escouade/spine/commit/f856976))
+- **openapi:** document SSE routes as event streams (Story 1.6) ([61ced1b](https://github.com/escouade/spine/commit/61ced1b))
+- **openapi:** guard-derived security (Story 1.7) ([aeaf256](https://github.com/escouade/spine/commit/aeaf256))
+- **openapi:** file-emit helper for JSON + YAML (Story 2.1) ([026c22e](https://github.com/escouade/spine/commit/026c22e))
+- **throttle:** package scaffold, module and boot validation (Story 1.3) ([c6efb44](https://github.com/escouade/spine/commit/c6efb44))
+- **throttle:** sliding-log memory store with injectable clock (Story 1.4) ([55c558b](https://github.com/escouade/spine/commit/55c558b))
+- **throttle:** key pipeline, per-policy bounds and introspection (Story 1.5) ([963ced2](https://github.com/escouade/spine/commit/963ced2))
+- **throttle:** store contract kit under ./testing (Story 1.6) ([9c8a650](https://github.com/escouade/spine/commit/9c8a650))
+- **throttle:** engine and gateway interceptor (Story 1.7) ([e703184](https://github.com/escouade/spine/commit/e703184))
+- **throttle:** ./http preset — 'ip' source and header translation (Story 1.9) ([38e9aab](https://github.com/escouade/spine/commit/38e9aab))
+- **throttle:** IPC route options (handle() + meta.throttle) (Story 2.1) ([91cf128](https://github.com/escouade/spine/commit/91cf128))
+- **throttle:** route snapshots + boot walk of inline specs (Story 2.2) ([9855e29](https://github.com/escouade/spine/commit/9855e29))
+- **throttle:** SSE connect enforcement (connectInterceptors) (Story 2.3) ([4cdf86d](https://github.com/escouade/spine/commit/4cdf86d))
+- **throttle,http-gateway:** HTTP route options via meta.throttle (Story 1.8) ([e38e80c](https://github.com/escouade/spine/commit/e38e80c))
+
+### 🩹 Fixes
+
+- **http-gateway:** case-insensitive header merge + reject non-object throttle meta (review PR #36) ([#36](https://github.com/escouade/spine/issues/36))
+- **mikro-orm:** sync yarn.lock with spine-migrate bin entry ([a8f309c](https://github.com/escouade/spine/commit/a8f309c))
+- **openapi:** order-insensitive security scheme conflict compare (review PR #32) ([#32](https://github.com/escouade/spine/issues/32))
+- **openapi:** sync YAML golden with the FailureMeta seam ([1b5469f](https://github.com/escouade/spine/commit/1b5469f))
+- **throttle:** override validation, scope guards + engine/store robustness (review PR #36) ([#36](https://github.com/escouade/spine/issues/36))
+- **throttle:** trustProxy hardening + preset reads outcome slot, headers on by default (review PR #36) ([#36](https://github.com/escouade/spine/issues/36))
+
+### ❤️ Thank You
+
+- Claude Fable 5
+- Claude Opus 4.8 (1M context)
+- Fabien Metais @metaisfabien
+
 ## 0.1.3 (2026-07-06)
 
 ### 🚀 Features
