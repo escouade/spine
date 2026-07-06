@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EntitySchema } from "@mikro-orm/core";
+import { EntitySchema, MikroORM, type Options } from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { PostgreSqlDriver } from "@mikro-orm/postgresql";
+import { Migrator } from "@mikro-orm/migrations";
 import type { MikroOrmModuleOptions } from "./mikro-orm.options";
 
 /**
@@ -57,6 +58,56 @@ export function makeTempMigrationsDir(): { path: string; cleanup: () => void } {
     path,
     cleanup: () => rmSync(path, { recursive: true, force: true }),
   };
+}
+
+/**
+ * Creates a throwaway migrations directory whose **generated migrations are executable** under the test
+ * runner (Story 2.7 verb execution). Two constraints matter, discovered empirically:
+ *
+ * 1. It lives **inside the project tree** (under `process.cwd()`), not the OS temp dir, so a generated
+ *    CommonJS migration's `require("@mikro-orm/migrations")` resolves up to the workspace `node_modules`.
+ * 2. It carries a `package.json` marking the folder **CommonJS**, so a `.js` migration is not parsed as
+ *    ESM under this package's `type: module` (which would throw `exports is not defined`).
+ *
+ * Paired with `emit: "js"` (see {@link initVerbOrm}), this lets `up`/`down` load and run real generated
+ * migration files under plain Node — no TS loader needed in the test. (Real apps run `.ts` migrations
+ * through a TS loader such as `tsx`, or compile them; that runtime concern is documented, not tested.)
+ */
+export function makeExecutableMigrationsDir(): {
+  path: string;
+  cleanup: () => void;
+} {
+  const path = mkdtempSync(join(process.cwd(), "spine-verb-migrations-"));
+  writeFileSync(join(path, "package.json"), '{ "type": "commonjs" }\n');
+  return {
+    path,
+    cleanup: () => rmSync(path, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Builds a **connected** `MikroORM` for a driver with the Migrator extension wired and `emit: "js"` (so
+ * generated migrations load under the test runner — see {@link makeExecutableMigrationsDir}). A fresh
+ * directory per test means the snapshot stays default-on (so generated migrations get a real `down`).
+ * Extra `migrations` options (e.g. `migrationsList`, `allOrNothing`) are merged in for scenario tests.
+ * `close(true)` when done.
+ */
+export async function initVerbOrm(
+  driver: HarnessDriver,
+  migrationsPath: string,
+  migrationsExtra: Options["migrations"] = {}
+): Promise<MikroORM> {
+  const {
+    name: _name,
+    retry: _retry,
+    multiWrite: _multiWrite,
+    ...ormOptions
+  } = driver.options(migrationsPath);
+  return MikroORM.init({
+    ...ormOptions,
+    extensions: [Migrator],
+    migrations: { ...ormOptions.migrations, emit: "js", ...migrationsExtra },
+  });
 }
 
 // A live postgres is used only when a connection URL is provided (CI sets it); otherwise the postgres

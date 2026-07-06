@@ -15,3 +15,6 @@ _bmad-output/
 
 # yarn pack output (release publish loop)
 *.tgz
+
+# Story 2.7 in-project throwaway migration dirs (executable migrations need node_modules resolution)
+packages/*/spine-verb-migrations-*/
