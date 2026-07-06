@@ -39,12 +39,17 @@ class RefundingStore implements ThrottleStore {
     if (log.length >= policy.limit) {
       log.shift(); // THE BUG: a rejection refunds the oldest accepted hit.
       return {
+        accepted: false,
         totalHits: policy.limit,
         resetMs: log.length ? log[0] + policy.windowMs - now : policy.windowMs,
       };
     }
     log.push(now);
-    return { totalHits: log.length, resetMs: log[0] + policy.windowMs - now };
+    return {
+      accepted: true,
+      totalHits: log.length,
+      resetMs: log[0] + policy.windowMs - now,
+    };
   }
 }
 

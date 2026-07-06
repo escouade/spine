@@ -100,6 +100,7 @@ export class InMemoryThrottleStore implements ThrottleStore {
     if (log.hits.length >= policy.limit) {
       // Reject — the log holds accepted hits only, so it does not grow.
       return {
+        accepted: false,
         totalHits: policy.limit,
         resetMs: log.hits[0] + policy.windowMs - now,
       };
@@ -107,6 +108,7 @@ export class InMemoryThrottleStore implements ThrottleStore {
 
     log.hits.push(now);
     return {
+      accepted: true,
       totalHits: log.hits.length,
       resetMs: log.hits[0] + policy.windowMs - now,
     };
