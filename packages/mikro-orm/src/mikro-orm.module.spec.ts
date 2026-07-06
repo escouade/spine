@@ -109,7 +109,7 @@ describe("MikroOrmModule — lifecycle + startup retry (Story 1.2)", () => {
       const connectSpy = vi.spyOn(orm, "connect");
       const closeSpy = vi.spyOn(orm, "close");
 
-      const mod = new MikroOrmModule(orm, silentLogger, DEFAULT_RETRY);
+      const mod = new MikroOrmModule(orm, silentLogger, DEFAULT_RETRY, false);
 
       await mod.onStart();
       expect(connectSpy).toHaveBeenCalledTimes(1);
@@ -130,7 +130,7 @@ describe("MikroOrmModule — lifecycle + startup retry (Story 1.2)", () => {
       const close = vi.fn().mockResolvedValue(undefined);
       const fakeOrm = { connect, close } as unknown as MikroORM;
       const retry: RetryPolicy = { attempts: 1, delayMs: 1, backoff: 1 };
-      const mod = new MikroOrmModule(fakeOrm, silentLogger, retry);
+      const mod = new MikroOrmModule(fakeOrm, silentLogger, retry, false);
 
       await expect(mod.onStart()).rejects.toThrow("no db"); // boot abort
       await expect(mod.onStop()).resolves.toBeUndefined();
@@ -143,7 +143,12 @@ describe("MikroOrmModule — lifecycle + startup retry (Story 1.2)", () => {
       const connect = vi.fn().mockResolvedValue(undefined);
       const close = vi.fn().mockRejectedValue(new Error("close failed"));
       const fakeOrm = { connect, close } as unknown as MikroORM;
-      const mod = new MikroOrmModule(fakeOrm, silentLogger, DEFAULT_RETRY);
+      const mod = new MikroOrmModule(
+        fakeOrm,
+        silentLogger,
+        DEFAULT_RETRY,
+        false
+      );
 
       await mod.onStart(); // connected = true
       await expect(mod.onStop()).resolves.toBeUndefined(); // swallowed + logged, not thrown
@@ -161,7 +166,7 @@ describe("MikroOrmModule — lifecycle + startup retry (Story 1.2)", () => {
       const fakeOrm = { connect, close: vi.fn() } as unknown as MikroORM;
       const retry: RetryPolicy = { attempts: 5, delayMs: 1, backoff: 2 };
 
-      const mod = new MikroOrmModule(fakeOrm, silentLogger, retry);
+      const mod = new MikroOrmModule(fakeOrm, silentLogger, retry, false);
       await expect(mod.onStart()).resolves.toBeUndefined();
       expect(connect).toHaveBeenCalledTimes(3);
     });
@@ -171,7 +176,7 @@ describe("MikroOrmModule — lifecycle + startup retry (Story 1.2)", () => {
       const fakeOrm = { connect, close: vi.fn() } as unknown as MikroORM;
       const retry: RetryPolicy = { attempts: 3, delayMs: 1, backoff: 1 };
 
-      const mod = new MikroOrmModule(fakeOrm, silentLogger, retry);
+      const mod = new MikroOrmModule(fakeOrm, silentLogger, retry, false);
       await expect(mod.onStart()).rejects.toThrow("no db");
       expect(connect).toHaveBeenCalledTimes(3);
     });

@@ -187,8 +187,10 @@ async function runVerb(
  * 1. `NODE_ENV` must be **explicitly** `development` or `test` (production / unknown / unset all refuse);
  * 2. the orthogonal `--force-drop` flag must be present — a non-prod env label alone never authorizes a
  *    drop;
- * 3. the target connection must **not** share a physical database with another configured connection
- *    (flagged at configure time, Story 1.3) — a drop cannot be proven to target a distinct DB (AD-6).
+ * 3. the target connection must **not** share a physical database with another configured **migration**
+ *    connection (flagged at configure time, Story 1.3) — a drop cannot be proven to target a distinct DB
+ *    (AD-6). Note the guard only sees connections that declare a `migrations` block; a plain connection
+ *    on the same database is not tracked, so the operator still owns confirming the DSN's target.
  */
 function assertFreshAllowed(
   connectionName: string,
@@ -205,7 +207,7 @@ function assertFreshAllowed(
   }
   if (!flags.forceDrop) {
     throw new Error(
-      `@spinejs/mikro-orm: "migration:fresh" drops every table — pass --force-drop to confirm ` +
+      `@spinejs/mikro-orm: "migration:fresh" drops the schema — pass --force-drop to confirm ` +
         `(required in addition to a non-production NODE_ENV).`
     );
   }

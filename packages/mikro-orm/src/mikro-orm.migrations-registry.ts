@@ -57,7 +57,14 @@ const samePhysicalDb = (
   a: MigrationConnectionInfo,
   b: MigrationConnectionInfo
 ): boolean =>
-  hasKnownDb(a) && hasKnownDb(b) && a.host === b.host && a.dbName === b.dbName;
+  hasKnownDb(a) &&
+  hasKnownDb(b) &&
+  a.host === b.host &&
+  // Normalize `dbName` before comparing so a sqlite file addressed by differently-spelled paths
+  // (`./data/app.sqlite` vs `data/app.sqlite`) is recognized as the SAME physical database — otherwise
+  // `migration:fresh` could drop a file another connection shares. `resolve()` is equality-preserving
+  // for a plain postgres db name too (both sides resolve the same way), so it never causes a miss.
+  resolve(a.dbName as string) === resolve(b.dbName as string);
 
 const dbLabel = (info: MigrationConnectionInfo): string =>
   `dbName "${info.dbName ?? ""}"${info.host ? `, host "${info.host}"` : ""}`;
