@@ -131,6 +131,21 @@ export function isSharedPhysicalConnection(name: string): boolean {
   return registry.get(name)?.sharedPhysical ?? false;
 }
 
+/**
+ * Whether a connection declared a `migrations` block (so it is a valid migration target). A connection
+ * with no migrations is not registered here and cannot be migrated — the CLI/`runMigrations` refuses it
+ * with a name-listing error (FR-10, AD-6). Populated at configure time, i.e. when the `AppModule` is
+ * imported, so it is ready before `runMigrations` composes anything.
+ */
+export function isMigrationConnection(name: string): boolean {
+  return registry.has(name);
+}
+
+/** The names of every connection that configured migrations — for the "unknown connection" error list. */
+export function configuredMigrationConnections(): string[] {
+  return [...registry.keys()];
+}
+
 /** Clears the registry. For test isolation, and for a process that composes more than one App. */
 export function resetMigrationRegistry(): void {
   registry.clear();
