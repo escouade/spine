@@ -8,7 +8,7 @@ import type {
 } from "@spinejs/gateway-core";
 import { HttpGateway } from "./http.gateway";
 import type { HttpRoute } from "./http.gateway";
-import { get } from "./http-routes";
+import { get, post } from "./http-routes";
 import type { HttpRouteMeta } from "./http-routes";
 import { ZodValidator } from "./zod.validator";
 import { DefaultHttpErrorMapper } from "./default-error.mapper";
@@ -178,6 +178,53 @@ describe("response-headers bag (AD-8, Story 1.2)", () => {
     expect([...res.headers.keys()]).toEqual(["content-type"]);
     expect(res.headers.get("content-type")).toBe("application/json");
     expect(await res.json()).toEqual({ ok: true, data: "fine" });
+  });
+});
+
+describe("throttle route-option copy (AD-3, Story 1.8)", () => {
+  // The marker carries `meta` directly (what `getRoutes` copies onto the LoadedRoute).
+  const metaOf = (marker: { meta?: unknown }): Record<string, unknown> =>
+    marker.meta as Record<string, unknown>;
+
+  it("stamps meta.throttle with the declared path template routeId on every route", () => {
+    const meta = metaOf(get("/users/:id", {}, () => 0));
+    expect(meta.throttle).toEqual({ routeId: "GET /users/:id" });
+  });
+
+  it("copies the user's throttle fields verbatim and adds exactly one field (routeId)", () => {
+    // A pre-typed variable (not a fresh literal): the transport copies the option opaquely —
+    // typing the option is @spinejs/throttle's augmentation, not this package's.
+    const options = {
+      throttle: {
+        policies: [{ limit: 3, windowMs: 1000, keyBy: "ip" }],
+        skip: ["global"],
+        override: { quota: { limit: 1 } },
+      },
+    };
+    const meta = metaOf(post("/login", options, () => 0));
+    expect(meta.throttle).toEqual({
+      ...options.throttle,
+      routeId: "POST /login",
+    });
+    // Verbatim copy: the nested fields are the caller's values, untouched.
+    expect(Object.keys(meta.throttle as object)).toEqual([
+      "policies",
+      "skip",
+      "override",
+      "routeId",
+    ]);
+  });
+
+  it("encodes `throttle: false` as a disabled marker (opt-out of all defaults)", () => {
+    const options = { throttle: false };
+    const meta = metaOf(get("/health", options, () => 0));
+    expect(meta.throttle).toEqual({ routeId: "GET /health", disabled: true });
+  });
+
+  it("never lets a user field overwrite the stamped routeId", () => {
+    const options = { throttle: { routeId: "SPOOFED" } };
+    const meta = metaOf(get("/a", options, () => 0));
+    expect((meta.throttle as { routeId: string }).routeId).toBe("GET /a");
   });
 });
 

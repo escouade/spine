@@ -217,6 +217,18 @@ function buildMarker<
     ...(options.responses !== undefined && { responses: options.responses }),
     ...(options.hidden !== undefined && { hidden: options.hidden }),
   };
+  // Namespaced battery meta (AD-3): the user's `throttle` option fields are copied VERBATIM under
+  // `meta.throttle` with exactly one stamped field added — `routeId` ("METHOD /path", the declared
+  // path template). The transport never interprets the fields (opaque copy); `throttle: false` is
+  // encoded as `disabled: true`. The option itself is typed only by @spinejs/throttle's
+  // `declare module` augmentation — without the battery, `throttle:` is an unknown property.
+  const throttleOption = (options as { throttle?: unknown }).throttle;
+  (meta as { throttle?: unknown }).throttle = {
+    ...(throttleOption === false
+      ? { disabled: true }
+      : (throttleOption as object | undefined)),
+    routeId: `${method} ${path}`,
+  };
   return makeRouteMarker<Ctx, HttpAddress, InputOf<S>>({
     address: { method, path },
     input: composeInput(options),
