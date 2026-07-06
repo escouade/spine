@@ -15,8 +15,13 @@ export const ROUTE_MARKER = Symbol.for("app-gateway:route-marker");
  * `address` is the transport's opaque address; `input` is the composed schema validated by the
  * pipeline; `invoke` is the user callback; `guards` are per-route guard classes (merged after the
  * controller's class-level `@UseGuards`, resolved by DI at registration); `meta` carries opaque
- * per-transport extras (e.g. split schemas + a response schema for OpenAPI, an HTTP success status)
- * — carried only, never interpreted by the core.
+ * per-transport extras (e.g. split schemas + a response schema for OpenAPI, an HTTP success status).
+ *
+ * Contract (AR4): the **core** never interprets `meta`. Beyond per-transport extras, a battery may
+ * own a documented, namespaced `meta` key (e.g. `meta.throttle` owned by `@spinejs/throttle`): the
+ * route helper copies the user's fields into it verbatim (adding only its own stamped fields), the
+ * transport carries it blindly, and only that battery's own interceptor reads the key. The core
+ * stays battery-agnostic — it neither knows nor interprets these namespaces.
  */
 export interface RouteMarker<Ctx extends GatewayContext, Addr = unknown> {
   [ROUTE_MARKER]: true;
