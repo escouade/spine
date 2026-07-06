@@ -33,8 +33,16 @@ const makeLogger = () => {
 };
 
 // A fake ORM whose `getMigrator()` returns the given stub — the only method the runner uses.
-const ormWith = (migrator: IMigrator): MikroORM =>
-  ({ getMigrator: () => migrator } as unknown as MikroORM);
+const ormWith = (
+  migrator: IMigrator,
+  schema: { dropSchema: (opts?: unknown) => Promise<void> } = {
+    dropSchema: vi.fn(async () => {}),
+  }
+): MikroORM =>
+  ({
+    getMigrator: () => migrator,
+    getSchemaGenerator: () => schema,
+  } as unknown as MikroORM);
 
 describe("MigrationRunner (delegation + logging)", () => {
   it("delegates create to the handler and logs the created file, per connection", async () => {
@@ -129,6 +137,30 @@ describe("MigrationRunner (delegation + logging)", () => {
     expect(migrator.down).toHaveBeenCalledWith({ to: "M1" });
     expect(info).toHaveBeenCalledWith(
       expect.stringMatching(/Rolled back 1 migration\(s\): M2/),
+      "MigrationRunner"
+    );
+  });
+
+  it("drops the schema and re-applies on fresh, logging what was re-applied (NFR-5)", async () => {
+    const schema = { dropSchema: vi.fn(async () => {}) };
+    const migrator = fakeMigrator({ up: vi.fn(async () => [{ name: "M1" }]) });
+    const { log, info } = makeLogger();
+    const runner = new MigrationRunner(
+      ormWith(migrator, schema),
+      log,
+      "default"
+    );
+
+    const applied = await runner.fresh();
+
+    expect(schema.dropSchema).toHaveBeenCalledWith({
+      dropMigrationsTable: true,
+    });
+    expect(applied).toEqual([{ name: "M1" }]);
+    expect(info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /dropped the schema and re-applied 1 migration\(s\): M1/
+      ),
       "MigrationRunner"
     );
   });

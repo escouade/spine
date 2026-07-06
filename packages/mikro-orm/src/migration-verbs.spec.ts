@@ -9,6 +9,7 @@ import { ClsModule } from "@spinejs/cls";
 import { MikroOrmModule, runMigrations } from "./index";
 import { createMigration } from "./migrations/create";
 import { up, down, list, pending } from "./migrations/run";
+import { fresh } from "./migrations/fresh";
 import { resetMigrationRegistry } from "./mikro-orm.migrations-registry";
 import {
   HARNESS_DRIVERS,
@@ -141,6 +142,44 @@ describe.each(HARNESS_DRIVERS)("migration verbs on $name", (driver) => {
     ).rejects.toThrow();
     // …and nothing was recorded as executed.
     expect(await list(migrator)).toHaveLength(0);
+  });
+
+  test("fresh drops the schema (incl. data) and re-applies from scratch (FR-9)", async () => {
+    dir = makeExecutableMigrationsDir();
+
+    // A migration creating a table that IS in the fixture entity metadata (harness_user), so the
+    // entity-metadata-driven dropSchema drops it. Portable SQL (no autoincrement) for both drivers.
+    class CreateUsers extends Migration {
+      override async up(): Promise<void> {
+        this.addSql(
+          "create table harness_user (id integer not null primary key, email text not null);"
+        );
+      }
+      override async down(): Promise<void> {
+        this.addSql("drop table harness_user;");
+      }
+    }
+    orm = await initVerbOrm(driver, dir.path, {
+      migrationsList: [{ name: "Migration001_users", class: CreateUsers }],
+    });
+    const migrator = orm.getMigrator();
+
+    await up(migrator);
+    await orm.em
+      .getConnection()
+      .execute("insert into harness_user (id, email) values (1, 'a@b.c')");
+    expect(
+      await orm.em.getConnection().execute("select * from harness_user")
+    ).toHaveLength(1);
+
+    const applied = await fresh(orm.getSchemaGenerator(), migrator);
+
+    // The table exists again (re-applied) but is empty — the data was dropped, proving a real reset.
+    expect(applied).toHaveLength(1);
+    expect(
+      await orm.em.getConnection().execute("select * from harness_user")
+    ).toHaveLength(0);
+    expect(await list(migrator)).toHaveLength(1); // tracking re-recorded
   });
 });
 

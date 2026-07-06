@@ -6,6 +6,7 @@ import {
   down,
   list,
   pending,
+  fresh,
   type CreateMigrationFlags,
   type CreateMigrationResult,
   type VersionFlags,
@@ -67,6 +68,33 @@ export class MigrationRunner {
     const reverted = await down(this.orm.getMigrator(), flags);
     this.report("Rolled back", "roll back", reverted);
     return reverted;
+  }
+
+  /**
+   * Drop the whole schema and re-apply every migration from scratch (dev reset). **Destructive** — the
+   * caller (the CLI command layer) is responsible for the production-safety policy before invoking this
+   * (AD-8); the runner just performs it and logs. Logs what it re-applied (NFR-5).
+   */
+  async fresh(): Promise<UmzugMigration[]> {
+    const applied = await fresh(
+      this.orm.getSchemaGenerator(),
+      this.orm.getMigrator()
+    );
+    if (applied.length === 0) {
+      this.log.info(
+        `${this.tag()} dropped the schema; no migrations to re-apply`,
+        CONTEXT
+      );
+    } else {
+      const names = applied.map((m) => m.name).join(", ");
+      this.log.info(
+        `${this.tag()} dropped the schema and re-applied ${
+          applied.length
+        } migration(s): ${names}`,
+        CONTEXT
+      );
+    }
+    return applied;
   }
 
   /** Executed migrations from this connection's tracking table (FR-6). */

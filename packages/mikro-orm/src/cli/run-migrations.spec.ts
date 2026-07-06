@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +64,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 // Build an AppModule around a migrations-configured connection, capturing its `MikroORM` so a test can
@@ -218,14 +219,97 @@ describe("runMigrations (headless composition-root)", () => {
       runMigrations(AppModule, ["migration:up"], { logger: silentLogger })
     ).rejects.toThrow();
   });
+});
 
-  it("refuses migration:fresh early, before composing, with an Epic 3 message", async () => {
+// Story 3.1 — migration:fresh production-safety policy, enforced before composing/connecting (AD-8).
+describe("migration:fresh policy", () => {
+  // vitest sets NODE_ENV=test by default, so the env gate is open unless a test stubs it.
+  it("refuses when NODE_ENV is not explicitly development or test (fail-closed)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
     const { AppModule } = makeAppModule({});
 
-    // `fresh` parses (grammar defined from Story 2.3) but its guarded handler lands in Epic 3. It is
-    // rejected before the app is composed, so an unreachable DB never masks it with a connect error.
+    await expect(
+      runMigrations(AppModule, ["migration:fresh", "--force-drop"], {
+        logger: silentLogger,
+      })
+    ).rejects.toThrow(
+      /refuses to run unless NODE_ENV is explicitly "development" or "test"/
+    );
+  });
+
+  it("refuses when --force-drop is absent (the env label alone never authorizes a drop)", async () => {
+    const { AppModule } = makeAppModule({});
+
     await expect(
       runMigrations(AppModule, ["migration:fresh"], { logger: silentLogger })
-    ).rejects.toThrow(/migration:fresh.*Epic 3/);
+    ).rejects.toThrow(/pass --force-drop/);
+  });
+
+  it("refuses a connection that shares a physical database with another (AD-6)", async () => {
+    // Two connections on the SAME sqlite file with distinct tracking tables → flagged shared-physical.
+    const dbFile = join(tmp, "shared.sqlite");
+    @Module({
+      imports: [
+        ClsModule,
+        MikroOrmModule.configure({
+          driver: BetterSqliteDriver,
+          dbName: dbFile,
+          entities: FIXTURE_ENTITIES,
+          migrations: { path: join(tmp, "m-default"), tableName: "m_default" },
+        }),
+        MikroOrmModule.configure({
+          name: "analytics",
+          driver: BetterSqliteDriver,
+          dbName: dbFile,
+          entities: FIXTURE_ENTITIES,
+          migrations: {
+            path: join(tmp, "m-analytics"),
+            tableName: "m_analytics",
+          },
+        }),
+      ],
+    })
+    class AppModule {}
+
+    await expect(
+      runMigrations(
+        AppModule,
+        ["migration:fresh", "--connection", "analytics", "--force-drop"],
+        {
+          logger: silentLogger,
+        }
+      )
+    ).rejects.toThrow(/shares a physical database/);
+  });
+
+  it("drops and re-applies when the policy passes (dev + --force-drop)", async () => {
+    // The migration creates a table that IS in the fixture entity metadata (harness_user), so
+    // dropSchema (entity-metadata-driven) drops it — proving the reset really dropped + re-applied.
+    class CreateUsers extends Migration {
+      override async up(): Promise<void> {
+        this.addSql(
+          "create table harness_user (id integer not null primary key autoincrement, email text not null);"
+        );
+      }
+      override async down(): Promise<void> {
+        this.addSql("drop table harness_user;");
+      }
+    }
+    const list: MigrationsList = [{ name: "CreateUsers", class: CreateUsers }];
+    const boot = () => makeAppModule({ migrationsList: list }).AppModule;
+
+    await runMigrations(boot(), ["migration:up"], { logger: silentLogger });
+    // fresh drops everything (incl. the tracking table) and re-applies from scratch — a second `up`
+    // over the same table would fail "already exists" if fresh had not dropped it first.
+    await runMigrations(boot(), ["migration:fresh", "--force-drop"], {
+      logger: silentLogger,
+    });
+
+    // The migration is recorded again after the reset (it was re-applied, not just dropped).
+    const listRun = capturingLogger();
+    await runMigrations(boot(), ["migration:list"], { logger: listRun.log });
+    expect(listRun.lines.join("\n")).toMatch(
+      /executed migrations: CreateUsers/
+    );
   });
 });

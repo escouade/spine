@@ -16,8 +16,10 @@ import { MigrationRunner } from "../mikro-orm.migration-runner";
 import {
   configuredMigrationConnections,
   isMigrationConnection,
+  isSharedPhysicalConnection,
   migrationRetryFor,
 } from "../mikro-orm.migrations-registry";
+import { isDevelopmentOrTest } from "../mikro-orm.production-safety";
 import {
   parseArgv,
   type MigrationCommand,
@@ -170,10 +172,49 @@ async function runVerb(
       return;
     }
     case "fresh":
-      // Parsed here since Story 2.3, but the guarded `fresh` command lands in Epic 3.
-      throw new Error(
-        `@spinejs/mikro-orm: "migration:fresh" is not available yet — it ships in the safe-automation epic (Epic 3).`
-      );
+      // Policy (NODE_ENV / --force-drop / shared-physical) was already enforced pre-compose by
+      // `assertFreshAllowed`; the runner just performs the drop + re-run.
+      await runner.fresh();
+      return;
+  }
+}
+
+/**
+ * The production-safety policy for the destructive `fresh` verb (AD-8, NFR-2). Enforced in the command
+ * layer, **before** the app is composed or any connection is opened — so a refusal never touches the
+ * database and its diagnostic is never masked by a connect error. Fail-closed and defense-in-depth:
+ *
+ * 1. `NODE_ENV` must be **explicitly** `development` or `test` (production / unknown / unset all refuse);
+ * 2. the orthogonal `--force-drop` flag must be present — a non-prod env label alone never authorizes a
+ *    drop;
+ * 3. the target connection must **not** share a physical database with another configured connection
+ *    (flagged at configure time, Story 1.3) — a drop cannot be proven to target a distinct DB (AD-6).
+ */
+function assertFreshAllowed(
+  connectionName: string,
+  flags: MigrationFlags
+): void {
+  if (!isDevelopmentOrTest()) {
+    throw new Error(
+      `@spinejs/mikro-orm: "migration:fresh" is destructive and refuses to run unless NODE_ENV is ` +
+        `explicitly "development" or "test" (it is "${
+          process.env.NODE_ENV ?? "unset"
+        }"). Set ` +
+        `NODE_ENV=development or test, and pass --force-drop.`
+    );
+  }
+  if (!flags.forceDrop) {
+    throw new Error(
+      `@spinejs/mikro-orm: "migration:fresh" drops every table — pass --force-drop to confirm ` +
+        `(required in addition to a non-production NODE_ENV).`
+    );
+  }
+  if (isSharedPhysicalConnection(connectionName)) {
+    throw new Error(
+      `@spinejs/mikro-orm: "migration:fresh" refuses connection "${connectionName}" — it shares a ` +
+        `physical database with another configured connection, so a drop cannot be proven to target a ` +
+        `distinct database. Give the connections distinct databases, or drop it manually.`
+    );
   }
 }
 
@@ -201,15 +242,6 @@ export async function runMigrations(
   const { command, connection, flags } = parseArgv(argv);
   const connectionName = connection ?? DEFAULT_CONNECTION;
 
-  // `fresh` parses (its grammar is defined from Story 2.3) but its guarded handler lands in Epic 3.
-  // Reject it here — before composing the app or opening a connection — so an unreachable DB does not
-  // mask this with a connection error (the diagnostic would otherwise be wrong).
-  if (command === "fresh") {
-    throw new Error(
-      `@spinejs/mikro-orm: "migration:fresh" is not available yet — it ships in the safe-automation epic (Epic 3).`
-    );
-  }
-
   // Fail before composing if the target is not a configured migration connection — an actionable list,
   // not an opaque "unknown provider" from DI (the registry is populated at AppModule import time).
   if (!isMigrationConnection(connectionName)) {
@@ -220,6 +252,12 @@ export async function runMigrations(
           ? `Configured migration connections: ${configured.join(", ")}.`
           : `No connection declares a migrations block — add one to MikroOrmModule.configure({ ..., migrations: {} }).`)
     );
+  }
+
+  // The destructive `fresh` verb's production-safety policy runs here — before composing or opening a
+  // connection — so a refusal is fail-closed and never masked by a connect error (AD-8).
+  if (command === "fresh") {
+    assertFreshAllowed(connectionName, flags);
   }
 
   const app = new App(
