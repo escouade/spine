@@ -405,11 +405,22 @@ function registerSuccessEnvelope(
   return registry.register(envelope, { derivedBase: envelopeBase });
 }
 
-/** The shared error envelope `{ ok: false, code: string }` — content-identical, so it dedups to one component. */
+/**
+ * The shared error envelope `{ ok: false, code: string, meta? }` — content-identical, so it dedups to
+ * one component. `meta` mirrors gateway-core's optional `FailureMeta` (semantic rejection context,
+ * e.g. `retryAfterMs` for rate limiting): optional and open-ended, so the addition stays additive.
+ */
 function errorEnvelope(): JsonSchemaObject {
   return {
     type: "object",
-    properties: { ok: { const: false }, code: { type: "string" } },
+    properties: {
+      ok: { const: false },
+      code: { type: "string" },
+      meta: {
+        type: "object",
+        properties: { retryAfterMs: { type: "number" } },
+      },
+    },
     required: ["ok", "code"],
   };
 }

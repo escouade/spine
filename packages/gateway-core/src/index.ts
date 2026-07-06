@@ -4,6 +4,7 @@
 export type {
   DispatchTarget,
   Envelope,
+  FailureMeta,
   GatewayContext,
   Guard,
   GuardConstructor,

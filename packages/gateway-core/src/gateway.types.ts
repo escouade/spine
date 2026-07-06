@@ -11,12 +11,29 @@ export interface ParseableSchema<T> {
 export type GatewayContext = object;
 
 /**
+ * Machine-readable context a producer (an interceptor, a battery) may attach to a failure
+ * envelope. **Semantic only** — values are transport-blind durations/quantities, never
+ * presentation (no HTTP header names): each transport surfaces them natively (HTTP maps them
+ * to headers, IPC clients read them off the envelope). Named fields are documented here as
+ * batteries claim them (`retryAfterMs` = rate limiting); the index signature lets a battery
+ * carry additional documented, JSON-serializable fields without another core change.
+ */
+export interface FailureMeta {
+  /** Relative duration (ms) after which the client may retry — set by rate limiting. */
+  retryAfterMs?: number;
+  /** Additional documented, JSON-serializable semantic fields owned by their producer. */
+  [key: string]: JsonValue | undefined;
+}
+
+/**
  * Result wrapper returned by every handler, transport-agnostic. `Code` is the set of
  * stable error codes a given transport maps its exceptions to (opaque to the lib).
+ * The failure arm optionally carries semantic {@link FailureMeta} (e.g. `retryAfterMs`),
+ * preserved verbatim by the pipeline and every transport — additive, never required.
  */
 export type Envelope<T, Code extends string = string> =
   | { ok: true; data: T }
-  | { ok: false; code: Code };
+  | { ok: false; code: Code; meta?: FailureMeta };
 
 /**
  * Injectable guard: decides whether a context is allowed to proceed. Replaces the old

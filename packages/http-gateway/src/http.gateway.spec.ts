@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Controller, getRoutes } from "@spinejs/gateway-core";
 import type {
+  ChainInterceptor,
   GatewayContext,
   Guard,
   GuardConstructor,
@@ -53,6 +54,35 @@ describe("HttpGateway route retention (AD-4)", () => {
     expect(gw.routes).toHaveLength(0);
     gw.register(getRoutes(new UsersController(), noGuards) as HttpRoute[]);
     expect(gw.routes).toHaveLength(1);
+  });
+});
+
+describe("failure envelope meta (FailureMeta seam)", () => {
+  it("surfaces an interceptor's failure `meta` end-to-end in the HTTP response body", async () => {
+    const rejecting: ChainInterceptor<HttpBaseContext, string, HttpRoute> = {
+      intercept: async () => ({
+        ok: false,
+        code: "TOO_MANY_REQUESTS",
+        meta: { retryAfterMs: 2000 },
+      }),
+    };
+    const gw = new HttpGateway(
+      new ZodValidator(),
+      new DefaultHttpErrorMapper(),
+      contextFactory,
+      [rejecting]
+    );
+    gw.register(getRoutes(new UsersController(), noGuards) as HttpRoute[]);
+
+    const res = await gw.app.request("/users");
+
+    // 429 via the existing status map; the semantic meta rides the JSON envelope untouched.
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      ok: false,
+      code: "TOO_MANY_REQUESTS",
+      meta: { retryAfterMs: 2000 },
+    });
   });
 });
 
