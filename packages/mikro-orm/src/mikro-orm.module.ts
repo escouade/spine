@@ -17,6 +17,7 @@ import {
 import { ClsModule, ClsService } from "@spinejs/cls";
 import { MikroOrmInterceptor } from "./mikro-orm.interceptor";
 import { SpineMikroLogger } from "./mikro-orm.logger";
+import { MigrationRunner } from "./mikro-orm.migration-runner";
 import { loadMigratorExtension } from "./mikro-orm.migrator";
 import { registerMigrationConnection } from "./mikro-orm.migrations-registry";
 import {
@@ -31,6 +32,7 @@ import {
   EM,
   emKey,
   entityManagerRef,
+  migrationRunnerRef,
   mikroOrmInterceptorRef,
   mikroOrmOptionsToken,
   mikroOrmRef,
@@ -336,6 +338,10 @@ export class MikroOrmModule implements OnStart, OnStop {
     // actionable error if it is absent). Otherwise the options object is passed through untouched, so a
     // connection that never migrates is byte-for-byte as before and pulls in no migrations dependency
     // (NFR-4). Reused by both the named and default connection paths below.
+    // A `MigrationRunner` (and its `migrationRunnerRef`) is provided ONLY for a connection that opted
+    // into migrations — so `orm.getMigrator()` is always safe to call and a non-migrating connection
+    // stays zero-cost (NFR-4).
+    const hasMigrations = ormOptions.migrations !== undefined;
     let resolvedOrmOptions: Options = ormOptions;
     if (ormOptions.migrations) {
       const migrator = loadMigratorExtension();
@@ -386,11 +392,23 @@ export class MikroOrmModule implements OnStart, OnStop {
           inject: [ormRef],
           factory: (orm: MikroORM) => ({ orm, retry: resolvedRetry }),
         },
+        // A per-connection `MigrationRunner`, only when this connection declares migrations (NFR-4).
+        ...(hasMigrations
+          ? [
+              {
+                provide: migrationRunnerRef(name),
+                inject: [ormRef, loggerToken],
+                factory: (orm: MikroORM, log: Logger) =>
+                  new MigrationRunner(orm, log, name),
+              },
+            ]
+          : []),
       ];
       node.exports = [
         ormRef,
         entityManagerRef(name),
         mikroOrmInterceptorRef(name),
+        ...(hasMigrations ? [migrationRunnerRef(name)] : []),
       ];
       return node;
     }
@@ -429,6 +447,24 @@ export class MikroOrmModule implements OnStart, OnStop {
           inject: [MikroOrmInterceptor],
           factory: (interceptor: MikroOrmInterceptor) => interceptor,
         },
+        // Default connection's `MigrationRunner` — the class token plus its name-based pass-through, so
+        // `MigrationRunner` and `migrationRunnerRef("default")` resolve the same instance. Only when
+        // migrations are configured (NFR-4).
+        ...(hasMigrations
+          ? [
+              {
+                provide: MigrationRunner,
+                inject: [MikroORM, loggerToken],
+                factory: (orm: MikroORM, log: Logger) =>
+                  new MigrationRunner(orm, log, DEFAULT_CONNECTION),
+              },
+              {
+                provide: migrationRunnerRef(DEFAULT_CONNECTION),
+                inject: [MigrationRunner],
+                factory: (runner: MigrationRunner) => runner,
+              },
+            ]
+          : []),
       ],
       exports: [
         MikroORM,
@@ -437,6 +473,9 @@ export class MikroOrmModule implements OnStart, OnStop {
         mikroOrmRef(DEFAULT_CONNECTION),
         entityManagerRef(DEFAULT_CONNECTION),
         mikroOrmInterceptorRef(DEFAULT_CONNECTION),
+        ...(hasMigrations
+          ? [MigrationRunner, migrationRunnerRef(DEFAULT_CONNECTION)]
+          : []),
       ],
     };
   }
