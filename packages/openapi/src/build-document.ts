@@ -38,8 +38,8 @@ const VERB_ORDER: readonly HttpMethod[] = [
  * (paths sorted lexically, operations in `VERB_ORDER`, components in sorted key order). Schemas are
  * converted through the injected {@link SchemaConverter} port (defaults to the zod adapter); reused and
  * body schemas are registered as `components/schemas` and referenced with `$ref` (AD-8). Responses are
- * envelope-wrapped `{ ok, data }` / `{ ok, code }` components with a multi-status map (AD-7).
- * SSE routes are skipped (Story 1.6) and guard-derived security is Story 1.7.
+ * envelope-wrapped `{ ok, data }` / `{ ok, code }` components with a multi-status map (AD-7); SSE routes
+ * are un-enveloped `text/event-stream` GETs (AD-15). Guard-derived security is Story 1.7.
  */
 export function buildOpenApiDocument(
   routes: readonly HttpRoute[],

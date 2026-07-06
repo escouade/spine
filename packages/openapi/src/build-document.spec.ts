@@ -389,6 +389,28 @@ describe("buildOpenApiDocument", () => {
     ).toBeDefined();
   });
 
+  it("maps an SSE route's path params as required parameters (AC #2)", () => {
+    @Controller({})
+    class JobStream {
+      stream = sse(
+        "/jobs/:id/stream",
+        { params: z.object({ id: z.string() }) },
+        async function* () {}
+      );
+    }
+    const doc = docFromController(new JobStream());
+    const op = (doc.paths as Record<string, Record<string, Op>>)[
+      "/jobs/{id}/stream"
+    ].get;
+    expect(op.parameters).toEqual([
+      { name: "id", in: "path", required: true, schema: { type: "string" } },
+    ]);
+    // Still an un-enveloped event stream.
+    expect((op.responses as Record<string, Op>)["200"]).toMatchObject({
+      content: { "text/event-stream": { schema: { type: "string" } } },
+    });
+  });
+
   it("leaves normal (non-SSE) routes enveloped as application/json (AC #3)", () => {
     const ok = (paths(build())["/health"].get.responses as Record<string, Op>)[
       "200"
