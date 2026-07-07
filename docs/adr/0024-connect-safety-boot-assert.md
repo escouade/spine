@@ -4,8 +4,8 @@
 - **Date**: 2026-07-07
 - **Scope**: `packages/gateway-core` (`ports.ts` — new `RequestScoped` marker; `connect-safety.ts` —
   `isConnectInterceptor` probe + `assertConnectInterceptorsSafe` boot guard), `packages/http-gateway`
-  (`http.gateway.ts` — run the guard while deriving the connect chain), `packages/mikro-orm`
-  (`mikro-orm.interceptor.ts` — `MikroOrmInterceptor` declares `requestScoped`).
+  (`http.gateway.ts` — run the guard while deriving the connect chain), `packages/mikro-orm` +
+  `packages/cls` (`MikroOrmInterceptor` / `ClsInterceptor` declare `requestScoped`).
 - **Relation**: closes the deferred residual named in [ADR 0022](0022-connect-interceptor-capability-marker.md)
   §Honest framing and §Consequences (the marker proves _intent to run at connect_, not _connect-safety_;
   the inheritance hole). Builds on the SSE connect chain of ADR 0022 / [ADR 0017](0017-sse-fan-out-in-http-gateway.md).
@@ -78,19 +78,28 @@ before `listen()`, so an unsafe wiring fails at boot — with the offending inte
 spelled out (remove `interceptConnect`, or drop the marker if genuinely connect-safe) — never as a silent
 runtime leak.
 
-### 3. `MikroOrmInterceptor` declares the marker
+### 3. The framework's request-scoped interceptors declare the marker
+
+Both `MikroOrmInterceptor` (forks a per-request `EntityManager` / unit-of-work) and `ClsInterceptor` (opens
+the per-dispatch CLS scope every other request-scoped resource lives inside) are request-scoped by
+definition and declare it:
 
 ```ts
 export class MikroOrmInterceptor implements GatewayInterceptor, RequestScoped {
   readonly requestScoped = true; // forks a per-request EM → must never run at connect
-  // ... no interceptConnect → already excluded from the connect chain (ADR 0022); the marker is the
-  //     belt to that suspenders, and closes the inheritance hole for any future subclass.
+}
+export class ClsInterceptor<Ctx>
+  implements GatewayInterceptor<Ctx>, RequestScoped
+{
+  readonly requestScoped = true; // opens the per-dispatch CLS scope → must never run at connect
 }
 ```
 
-Today `MikroOrmInterceptor` has no `interceptConnect`, so it is already excluded from connect. The marker
-adds no behavior in the happy path; it exists so that the day someone adds `interceptConnect` (directly or
-via a connect-capable base), the gateway refuses to boot instead of leaking.
+Neither has `interceptConnect` today, so both are already excluded from the connect chain by construction
+(ADR 0022). The marker adds no behavior in the happy path; it exists so that the day someone adds
+`interceptConnect` (directly or via a connect-capable base), the gateway refuses to boot instead of
+leaking. Marking `ClsInterceptor` too keeps the guard's invariant coherent — the framework's canonical
+request-scope opener is not left as the one unguarded request-scoped interceptor.
 
 ## Honest framing
 
@@ -124,8 +133,9 @@ marker cleanly separates "runs at connect and that's fine" from "must never run 
   derivation and the safety guard share one definition and cannot diverge.
 - **Positive**: zero happy-path cost — the guard is one boot-time scan; a correctly wired app (throttle
   connect-capable + UoW request-scoped) passes untouched.
-- **Neutral**: `RequestScoped` is a new public export of `gateway-core`; other request-scoped interceptors
-  (e.g. a future one holding a per-request lease) should declare it too to benefit from the guard.
+- **Neutral**: `RequestScoped` is a new public export of `gateway-core`; the framework's request-scoped
+  interceptors (`MikroOrmInterceptor`, `ClsInterceptor`) declare it, and any future one (e.g. holding a
+  per-request lease) should too to benefit from the guard.
 - **Negative**: it remains a runtime assertion trusting self-declaration — an author who both omits the
   marker and adds `interceptConnect` to a request-scoped interceptor is still unguarded. Accepted: the
   type system cannot close this without the double-wiring ADR 0022 removed (see §Honest framing).

@@ -253,8 +253,9 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
 });
 
 describe("MikroOrmInterceptor — connect-safety marker (ADR 0024)", () => {
-  it("declares requestScoped, so a gateway boot-assert catches it if it ever gained interceptConnect", () => {
+  it("declares the requestScoped marker", () => {
     // Constructing is enough — the constructor only stores; we assert the static marker, not behavior.
+    // The marker's effect (a gateway boot-assert firing) is covered in gateway-core's connect-safety.spec.
     const interceptor = new MikroOrmInterceptor(
       {} as unknown as MikroORM,
       {} as unknown as ClsService,

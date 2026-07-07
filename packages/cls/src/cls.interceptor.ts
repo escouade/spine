@@ -3,6 +3,7 @@ import type {
   Envelope,
   GatewayContext,
   GatewayInterceptor,
+  RequestScoped,
 } from "@spinejs/gateway-core";
 import type { ClsService, ClsStore } from "./cls.service";
 
@@ -13,8 +14,17 @@ import type { ClsService, ClsStore } from "./cls.service";
  * something the context doesn't carry verbatim (e.g. a generated `reqId`).
  */
 export class ClsInterceptor<Ctx extends GatewayContext>
-  implements GatewayInterceptor<Ctx>
+  implements GatewayInterceptor<Ctx>, RequestScoped
 {
+  /**
+   * The canonical request-scoped interceptor: it opens a per-dispatch CLS scope (`cls.run`) that every
+   * downstream request-scoped resource (a MikroORM fork) lives inside. It must never run at a transport's
+   * connection phase — declaring the marker makes the connect-safety boot-assert (ADR 0024) refuse boot
+   * if a subclass (or a future edit) ever gave it `interceptConnect`. Today it has none, so it is already
+   * excluded from any connect chain by construction (ADR 0022); the marker locks that invariant in.
+   */
+  readonly requestScoped = true;
+
   constructor(
     private readonly cls: ClsService,
     private readonly seed: (ctx: Ctx) => ClsStore = (ctx) =>

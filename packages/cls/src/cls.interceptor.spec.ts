@@ -70,4 +70,12 @@ describe("ClsInterceptor", () => {
 
     expect(cls.active).toBe(false);
   });
+
+  it("declares the requestScoped marker so it can never run at a connect phase (ADR 0024)", () => {
+    // The scope opener is request-scoped by definition; the marker lets the connect-safety boot-assert
+    // reject it (or a subclass) if it ever gained interceptConnect.
+    expect(new ClsInterceptor<AppContext>(new ClsService()).requestScoped).toBe(
+      true
+    );
+  });
 });

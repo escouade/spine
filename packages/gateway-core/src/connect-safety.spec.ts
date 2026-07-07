@@ -155,6 +155,33 @@ describe("assertConnectInterceptorsSafe (boot guard)", () => {
     ).toThrow(/LeakyUow/);
   });
 
+  it("names a dangerous object-literal interceptor generically (constructor.name === 'Object')", () => {
+    // A plain object (not a class instance) reports `constructor.name === "Object"`; the message must
+    // not read "Object is marked ...", it falls back to the generic phrasing. Exercises the name fallback.
+    const literal = {
+      requestScoped: true,
+      async intercept(
+        _t: unknown,
+        _c: unknown,
+        _i: unknown,
+        next: () => Promise<Envelope<unknown>>
+      ) {
+        return next();
+      },
+      async interceptConnect(
+        _t: unknown,
+        _c: unknown,
+        _i: unknown,
+        next: () => Promise<Envelope<unknown>>
+      ) {
+        return next();
+      },
+    };
+    expect(() => assertConnectInterceptorsSafe([literal])).toThrow(
+      /an interceptor is marked `requestScoped`/
+    );
+  });
+
   it("does NOT flag a truthy-but-non-true requestScoped value (marker is the literal true)", () => {
     // The `RequestScoped` type pins `requestScoped: true`; a stray truthy value is not the marker and
     // the guard is strict `=== true`, so it neither false-positives here nor silently downgrades.
