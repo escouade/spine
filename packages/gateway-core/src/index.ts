@@ -20,6 +20,7 @@ export { DispatchPipeline } from "./pipeline";
 export { ValidationError, UnauthorizedError } from "./ports";
 export type {
   ChainInterceptor,
+  ConnectInterceptor,
   ContextFactory,
   ErrorMapper,
   GatewayInterceptor,

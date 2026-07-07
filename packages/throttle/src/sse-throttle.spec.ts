@@ -1,8 +1,10 @@
-// Story 2.3 — SSE connect enforcement. The SAME throttle interceptor instance drops into the
-// http-gateway `connectInterceptors` slot: connection attempts count against the policies, the deny
-// is a 429 envelope carrying `Retry-After` + `meta.retryAfterMs`, stream events are never counted,
-// and the main `interceptors` array keeps its ADR-0017 no-SSE behavior. `sse()` copies `throttle`
-// verbatim + stamps routeId like the verb helpers.
+// SSE connect enforcement (Design 4′). The throttle interceptor implements `ConnectInterceptor`, so
+// the SAME instance placed in the gateway's `interceptors` is automatically run at SSE connect time:
+// connection attempts count against the policies, a deny is a 429 envelope carrying `Retry-After` +
+// `meta.retryAfterMs`, stream events are never counted, and the main `interceptors` array keeps its
+// ADR-0017 no-SSE behavior for the streaming body. A request-only interceptor (no `interceptConnect`)
+// is structurally excluded from the connect chain. `sse()` copies `throttle` verbatim + stamps routeId
+// like the verb helpers.
 import "./http"; // loads the http-gateway `throttle` augmentation (verb + sse options)
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Controller, getRoutes } from "@spinejs/gateway-core";
@@ -76,21 +78,22 @@ async function closeStream(res: Response): Promise<void> {
   await res.body?.cancel().catch(() => {});
 }
 
-describe("SSE connect enforcement through connectInterceptors (Story 2.3)", () => {
+describe("SSE connect enforcement via ConnectInterceptor (Design 4′)", () => {
   const opened: Response[] = [];
   afterEach(async () => {
     for (const res of opened.splice(0)) await closeStream(res);
   });
 
+  // Design 4′: the throttle interceptor is wired ONCE, in the main `interceptors` list. Because it
+  // implements `ConnectInterceptor`, the gateway derives the connect chain from that same list.
   function gatewayWith(interceptor: ThrottleInterceptor, hub: SseHub<string>) {
     const gw = new HttpGateway(
       new ZodValidator(),
       new DefaultHttpErrorMapper(),
       contextFactory,
-      [], // main interceptors: empty — SSE must not touch them anyway
+      [interceptor], // single list — connect chain is derived from it (no separate slot)
       undefined,
-      0, // no heartbeat timer
-      [interceptor] // connectInterceptors slot
+      0 // no heartbeat timer
     );
     gw.register(streamRoutes(hub));
     return gw;
@@ -141,12 +144,15 @@ describe("SSE connect enforcement through connectInterceptors (Story 2.3)", () =
     expect(third.status).toBe(429);
   });
 
-  it("keeps the main `interceptors` array free of SSE (ADR-0017): connect never runs it", async () => {
+  it("excludes a request-only interceptor from the connect chain (structural, Design 4′)", async () => {
     const hub = new SseHub<string>();
-    let mainCalls = 0;
-    const mainSpy: GatewayInterceptor = {
+    let requestOnlyCalls = 0;
+    // A plain `GatewayInterceptor` with NO `interceptConnect` — e.g. a request-scoped UoW. It must
+    // never run at connect: the gateway filters the connect chain on `interceptConnect` presence, and
+    // the SSE path bypasses the buffered `interceptors` pipeline entirely (ADR-0017).
+    const requestOnly: GatewayInterceptor = {
       intercept: (_t, _c, _i, next) => {
-        mainCalls += 1;
+        requestOnlyCalls += 1;
         return next();
       },
     };
@@ -154,28 +160,26 @@ describe("SSE connect enforcement through connectInterceptors (Story 2.3)", () =
       new ZodValidator(),
       new DefaultHttpErrorMapper(),
       contextFactory,
-      [mainSpy], // main interceptors
+      [requestOnly, throttleInterceptor(5)], // one list: only the throttle interceptor is connect-capable
       undefined,
-      0,
-      [throttleInterceptor(5)] // connect interceptors
+      0
     );
     gw.register(streamRoutes(hub));
 
     opened.push(await gw.app.request("/stream"));
-    expect(mainCalls).toBe(0); // the SSE connect bypassed the buffered pipeline entirely
+    expect(requestOnlyCalls).toBe(0); // request-only interceptor never touched the connection
   });
 
-  it("shares one engine + store when the same instance is in both slots — no double count", async () => {
+  it("shares one engine + store across dispatch and connect from a single list (no double count)", async () => {
     const hub = new SseHub<string>();
     const interceptor = throttleInterceptor(2); // gateway-scoped limit 2
     const gw = new HttpGateway(
       new ZodValidator(),
       new DefaultHttpErrorMapper(),
       contextFactory,
-      [interceptor], // dispatch slot
+      [interceptor], // ONE list — same instance enforces dispatch (request) and connect (SSE)
       undefined,
-      0,
-      [interceptor] // connect slot — the SAME instance
+      0
     );
     @Controller({})
     class ApiController {
@@ -192,7 +196,7 @@ describe("SSE connect enforcement through connectInterceptors (Story 2.3)", () =
     const ping1 = await gw.app.request("/ping"); // consumes 1 (dispatch)
     expect(ping1.status).toBe(200);
     opened.push(await gw.app.request("/stream")); // consumes 2 (connect) — same bucket
-    // The 3rd hit on the shared gateway bucket is denied on EITHER slot (one store, no double count).
+    // The 3rd hit on the shared gateway bucket is denied on EITHER path (one store, no double count).
     const ping3 = await gw.app.request("/ping");
     expect(ping3.status).toBe(429);
     const stream3 = await gw.app.request("/stream");

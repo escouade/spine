@@ -30,9 +30,6 @@ const contextFactoryToken = new InjectionToken<
 const interceptorsToken = new InjectionToken<
   ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
 >("http-gateway.interceptors");
-const connectInterceptorsToken = new InjectionToken<
-  ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
->("http-gateway.connect-interceptors");
 const statusMapperToken = new InjectionToken<
   ((code: string) => number) | undefined
 >("http-gateway.status-mapper");
@@ -50,7 +47,6 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
   inject: [HttpGateway, portToken] as const,
   providers: [
     { provide: interceptorsToken, value: [] },
-    { provide: connectInterceptorsToken, value: [] },
     { provide: statusMapperToken, value: undefined },
     { provide: portToken, value: undefined },
     { provide: sseHeartbeatToken, value: undefined },
@@ -63,7 +59,6 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
         interceptorsToken,
         statusMapperToken,
         sseHeartbeatToken,
-        connectInterceptorsToken,
       ],
       factory: (
         validator: Validator,
@@ -71,12 +66,7 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
         contextFactory: ContextFactory<HttpRaw, HttpBaseContext>,
         interceptors: ChainInterceptor<HttpBaseContext, string, HttpRoute>[],
         statusMapper: ((code: string) => number) | undefined,
-        sseHeartbeatMs: number | undefined,
-        connectInterceptors: ChainInterceptor<
-          HttpBaseContext,
-          string,
-          HttpRoute
-        >[]
+        sseHeartbeatMs: number | undefined
       ) =>
         new HttpGateway(
           validator,
@@ -84,8 +74,7 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
           contextFactory,
           interceptors,
           statusMapper,
-          sseHeartbeatMs,
-          connectInterceptors
+          sseHeartbeatMs
         ),
     },
   ],
@@ -125,16 +114,13 @@ export class HttpGatewayModule implements OnStart, OnStop {
     contextFactory?: ProviderAdapter<ContextFactory<HttpRaw, HttpBaseContext>>;
     errorMapper?: ProviderAdapter<ErrorMapper<string>>;
     validator?: ProviderAdapter<Validator>;
-    interceptors?: ProviderAdapter<
-      ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
-    >;
     /**
-     * SSE connection-attempt enforcement (AD-6): interceptors run in `dispatchSse` before guards.
-     * Pass the SAME instance you place in `interceptors` (e.g. the throttle interceptor) to close the
-     * SSE hole in a global quota with one engine and one store. The main `interceptors` array keeps
-     * its ADR-0017 no-SSE behavior. Default: none (SSE unenforced, as before this seam).
+     * Cross-cutting interceptors, outermost-first. An interceptor that also implements
+     * `ConnectInterceptor` is automatically enforced at SSE **connect** time (Design 4′) — no separate
+     * wiring; a request-only interceptor is never run on a connection. The `interceptors` array keeps
+     * its ADR-0017 no-SSE behavior for the streaming body (it never wraps a stream).
      */
-    connectInterceptors?: ProviderAdapter<
+    interceptors?: ProviderAdapter<
       ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
     >;
     /** Maps an `ErrorMapper` code to an HTTP status. Defaults to the built-in BAD_REQUEST/UNAUTHORIZED/INTERNAL_ERROR mapping. */
@@ -161,10 +147,6 @@ export class HttpGatewayModule implements OnStart, OnStop {
           options.validator ?? { factory: () => new ZodValidator() }
         ),
         toProvider(interceptorsToken, options.interceptors ?? { value: [] }),
-        toProvider(
-          connectInterceptorsToken,
-          options.connectInterceptors ?? { value: [] }
-        ),
         toProvider(
           statusMapperToken,
           options.statusMapper ?? { value: undefined }

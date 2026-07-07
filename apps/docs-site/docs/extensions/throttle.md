@@ -216,9 +216,9 @@ key — never leave a route keyed only by a selector that can return `null`.
 
 ### Enforce SSE connections
 
-The main `interceptors` array never runs on an SSE stream (ADR 0017). To count SSE **connection
-attempts** against your quota, pass the same interceptor instance to the http-gateway
-`connectInterceptors` slot — one engine, one store:
+The main `interceptors` array never runs on an SSE stream (ADR 0017) — but the throttle interceptor
+implements `ConnectInterceptor`, so the **same instance** in `interceptors` is automatically run at the
+SSE **connect** attempt. Nothing extra to wire:
 
 ```typescript
 HttpGatewayModule.configure({
@@ -230,18 +230,15 @@ HttpGatewayModule.configure({
   },
   interceptors: {
     inject: [throttleInterceptorRef()],
-    factory: (throttle) => [throttle],
-  },
-  connectInterceptors: {
-    inject: [throttleInterceptorRef()],
-    factory: (throttle) => [throttle], // the SAME token → the SAME instance
+    factory: (throttle) => [throttle], // enforced at request AND at SSE connect — one engine, one store
   },
 });
 ```
 
 The connection attempt is enforced before guards; stream **events** are never counted. A denied connect
 gets a `429` envelope with `Retry-After`, exactly like a buffered route. Declare a stream's policy with
-`sse("/stream", { throttle: { ... } }, fn)`.
+`sse("/stream", { throttle: { ... } }, fn)`. A request-only interceptor (one that does not implement
+`ConnectInterceptor`, e.g. a unit-of-work holding a transaction) is never run at connect.
 
 ### Validate route-inline specs at boot
 
