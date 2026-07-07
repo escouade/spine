@@ -172,7 +172,7 @@ describe("boot walk hardens malformed route-inline `meta.throttle` sub-fields (r
     );
     expect(() => mod.onStart()).toThrow(ThrottleConfigError);
     expect(() => mod.onStart()).toThrow(
-      /POST \/bad-skip-entry.*skip.*policy-name strings.*got a number/s
+      /POST \/bad-skip-entry.*skip.*policy-name strings.*got number/s
     );
   });
 
@@ -206,6 +206,43 @@ describe("boot walk hardens malformed route-inline `meta.throttle` sub-fields (r
     expect(() => mod.onStart()).toThrow(ThrottleConfigError);
     expect(() => mod.onStart()).toThrow(
       /POST \/str-disabled.*disabled.*boolean.*got string/s
+    );
+  });
+
+  it("rejects a `policies` entry that is null — names the route + index (no TypeError)", () => {
+    const mod = moduleWalking(
+      metaSnapshot({ routeId: "POST /null-policy", policies: [null] })
+    );
+    // Without the entry guard this is a raw `TypeError` on `policy.limit` — the exact symptom the
+    // guard exists to kill (review #40).
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /POST \/null-policy.*policies\[0\].*policy object.*got null/s
+    );
+  });
+
+  it("rejects a non-string `routeId` — closes the shared-`route`-bucket footgun (review #40)", () => {
+    const mod = moduleWalking(
+      metaSnapshot({
+        routeId: null,
+        policies: [{ limit: 1, windowMs: 1000, keyBy: () => "k" }],
+      })
+    );
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /throttle\.routeId.*non-empty string.*got null/s
+    );
+  });
+
+  it("rejects `skip: ['constructor']` — a prototype-chain name is not a configured default (review #40)", () => {
+    const mod = moduleWalking(
+      metaSnapshot({ routeId: "POST /proto-skip", skip: ["constructor"] })
+    );
+    // `"constructor" in policies` is `true` via the prototype chain; the own-property check keeps it
+    // fail-loud instead of silently no-opping the skip.
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /constructor.*not a configured gateway default/s
     );
   });
 
