@@ -530,18 +530,27 @@ function assertRouteMetaShape(raw: ThrottleRouteMeta, routeId: string): void {
     }
   }
   if (meta.override !== undefined) {
-    if (!isPlainObject(meta.override)) {
+    // The `override` MAP must be a GENUINELY-plain object too, not just a non-null non-array one (AC8):
+    // an exotic `override: new Map(...)` / `new Date()` passes the loose check, then `Object.entries`
+    // yields `[]` and EVERY override is silently dropped with zero diagnostic — the same fail-silent
+    // class the per-entry guard below closes one level down.
+    if (!isGenuinelyPlainObject(meta.override)) {
       fail(
-        `\`throttle.override\` must be an object mapping policy names to override values ` +
+        `\`throttle.override\` must be a plain object mapping policy names to override values ` +
           `(got ${describeType(meta.override)})`
       );
     }
     for (const [name, value] of Object.entries(
       meta.override as Record<string, unknown>
     )) {
-      if (!isPlainObject(value)) {
+      // A GENUINELY-plain object only (AC8): a `Date`/`RegExp`/`Map` is `typeof === "object"` and
+      // passes the loose `isPlainObject`, then `{ ...base, ...value }` spreads its (non-enumerable /
+      // absent) own props to NOTHING — the override is silently dropped and the route keeps the
+      // unmodified default with zero diagnostic (review #40 override-exotic). A legitimate empty
+      // `override: {}` and an `Object.create(null)` must still pass, so the check is proto-based.
+      if (!isGenuinelyPlainObject(value)) {
         fail(
-          `\`throttle.override.${name}\` must be an object of override values ` +
+          `\`throttle.override.${name}\` must be a plain object of override values ` +
             `(got ${describeType(value)})`
         );
       }
@@ -549,15 +558,39 @@ function assertRouteMetaShape(raw: ThrottleRouteMeta, routeId: string): void {
   }
 }
 
-/** A non-null, non-array object — the shape `override` and each of its entries must have. */
+/** A non-null, non-array object — the shape a `policies` entry must have (a policy object). */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Human-readable runtime kind for a config-error `(got …)` suffix (`null`/`array` over bare `object`). */
+/**
+ * A GENUINELY-plain object (AC8): an object literal (`Object.prototype`) or a `Object.create(null)`,
+ * but NOT an exotic instance (`Date`/`RegExp`/`Map`/array). Stricter than {@link isPlainObject} — used
+ * only for `override` ENTRY values, which are spread into a policy (`{ ...base, ...value }`): an exotic
+ * value spreads to nothing and silently drops the override, so it must be rejected while an empty `{}`
+ * still passes. The proto check is the distinguisher (an array's proto is `Array.prototype`, a Date's
+ * is `Date.prototype`; only a literal / null-proto object qualifies).
+ */
+function isGenuinelyPlainObject(
+  value: unknown
+): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Human-readable runtime kind for a config-error `(got …)` suffix: `null`/`array` over a bare `object`,
+ * and an exotic instance named by its constructor (`Date`/`Map`/`RegExp`) so the error points at the
+ * real culprit rather than an unhelpful `object`.
+ */
 function describeType(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
+  if (typeof value === "object") {
+    const ctor = (value as { constructor?: { name?: string } }).constructor;
+    if (ctor?.name && ctor.name !== "Object") return ctor.name;
+  }
   return typeof value;
 }
 

@@ -31,9 +31,10 @@ export type {
   ThrottleRouteOption,
 } from "./engine";
 export { ThrottleInterceptor } from "./interceptor";
-export { ThrottleModule, throttleInterceptorRef } from "./throttle.module";
-export type {
-  ThrottleModuleOptions,
-  RouteSnapshot,
-  RouteSnapshotSource,
+export { ThrottleMetaValidator } from "./meta-validator";
+export {
+  ThrottleModule,
+  throttleInterceptorRef,
+  throttleMetaValidatorRef,
 } from "./throttle.module";
+export type { ThrottleModuleOptions } from "./throttle.module";

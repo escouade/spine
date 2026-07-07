@@ -40,6 +40,28 @@ wired key source (`'ip'` from `@spinejs/throttle/http`, `'sender'` from
 Full guides (route options, custom keys, the store port, IPC error mapping) live in the SpineJS
 documentation site.
 
+## Validate route-inline specs at boot
+
+To fail startup (not the first dispatch) on a bad route-inline `throttle` spec, place
+`throttleMetaValidatorRef()` in the gateway's `metaValidators` — the framework `MetaValidator` slot —
+next to the interceptor:
+
+```ts
+metaValidators: {
+  inject: [throttleMetaValidatorRef()],
+  factory: (v) => [v],
+},
+```
+
+The gateway crosses its own routes against its own validators at start, so validated routes == enforced
+routes (a validator can't be wired to the wrong gateway).
+
+> **Migrating from 0.1.4 (breaking).** `ThrottleModule.configure({ routes })` and the
+> `RouteSnapshot`/`RouteSnapshotSource` exports were removed. Replace
+> `ThrottleModule.configure({ routes: { inject: [HttpGateway], factory: (gw) => () => gw.routes } })`
+> with the `metaValidators: [throttleMetaValidatorRef()]` wiring above on the gateway. Runtime
+> enforcement (the `interceptors` wiring) is unchanged.
+
 ## Subpath exports
 
 | Import                           | Contents                                                          |

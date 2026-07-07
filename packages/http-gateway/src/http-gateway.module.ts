@@ -6,11 +6,12 @@ import {
   OnStart,
   OnStop,
 } from "@spinejs/core";
-import { toProvider } from "@spinejs/gateway-core";
+import { toProvider, validateRouteMeta } from "@spinejs/gateway-core";
 import type {
   ContextFactory,
   ErrorMapper,
   ChainInterceptor,
+  MetaValidator,
   ProviderAdapter,
   Validator,
 } from "@spinejs/gateway-core";
@@ -30,6 +31,9 @@ const contextFactoryToken = new InjectionToken<
 const interceptorsToken = new InjectionToken<
   ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
 >("http-gateway.interceptors");
+const metaValidatorsToken = new InjectionToken<MetaValidator[]>(
+  "http-gateway.meta-validators"
+);
 const statusMapperToken = new InjectionToken<
   ((code: string) => number) | undefined
 >("http-gateway.status-mapper");
@@ -44,9 +48,10 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
  * (context factory, error mapper, optional custom validator).
  */
 @Module({
-  inject: [HttpGateway, portToken] as const,
+  inject: [HttpGateway, portToken, metaValidatorsToken] as const,
   providers: [
     { provide: interceptorsToken, value: [] },
+    { provide: metaValidatorsToken, value: [] },
     { provide: statusMapperToken, value: undefined },
     { provide: portToken, value: undefined },
     { provide: sseHeartbeatToken, value: undefined },
@@ -85,11 +90,22 @@ export class HttpGatewayModule implements OnStart, OnStop {
 
   constructor(
     private readonly gateway: HttpGateway,
-    private readonly port: number | undefined
+    private readonly port: number | undefined,
+    private readonly metaValidators: MetaValidator[]
   ) {}
 
-  /** Starts listening once every module is initialized, when `configure()` was given a `port`. */
+  /**
+   * Once every module is initialized (so all feature modules have registered their routes), crosses
+   * this gateway's own routes × its own `metaValidators` — a bad route-inline `meta` slice (e.g. a
+   * throttle spec with an unwired `keyBy`) fails boot with the route named. The walk runs BEFORE
+   * `listen()`: the port never opens on a misconfigured route. Zero validators wired → no walk.
+   */
   onStart(): void {
+    validateRouteMeta(
+      this.gateway.routes,
+      this.metaValidators,
+      (a) => `${a.method} ${a.path}` // HttpAddress → the routeId the helpers stamp ("GET /path")
+    );
     if (this.port !== undefined) this.server = this.gateway.listen(this.port);
   }
 
@@ -123,6 +139,12 @@ export class HttpGatewayModule implements OnStart, OnStop {
     interceptors?: ProviderAdapter<
       ChainInterceptor<HttpBaseContext, string, HttpRoute>[]
     >;
+    /**
+     * Boot-time, per-route `meta` validators (a separate concept from `interceptors`). At start, this
+     * gateway crosses its own routes × these validators and fails boot on a bad route-inline `meta`
+     * slice (a battery ships one, e.g. `throttleMetaValidatorRef()`). Default `[]` → no walk.
+     */
+    metaValidators?: ProviderAdapter<MetaValidator[]>;
     /** Maps an `ErrorMapper` code to an HTTP status. Defaults to the built-in BAD_REQUEST/UNAUTHORIZED/INTERNAL_ERROR mapping. */
     statusMapper?: ProviderAdapter<(code: string) => number>;
     port?: number;
@@ -147,6 +169,10 @@ export class HttpGatewayModule implements OnStart, OnStop {
           options.validator ?? { factory: () => new ZodValidator() }
         ),
         toProvider(interceptorsToken, options.interceptors ?? { value: [] }),
+        toProvider(
+          metaValidatorsToken,
+          options.metaValidators ?? { value: [] }
+        ),
         toProvider(
           statusMapperToken,
           options.statusMapper ?? { value: undefined }

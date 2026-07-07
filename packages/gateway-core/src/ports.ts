@@ -124,6 +124,25 @@ export type ChainInterceptor<
   Route extends DispatchTarget<Ctx> = DispatchTarget<Ctx>
 > = GatewayInterceptor<Ctx, Code, Route> | GatewayInterceptor;
 
+/**
+ * Boot-time, per-route validator for one battery's namespaced slice of a route's `meta` (e.g.
+ * `meta.throttle`). A gateway crosses its own routes × its own registered `MetaValidator`s at start
+ * and, for every route whose `meta` carries `namespace`, calls `validate(routeId, meta[namespace])` —
+ * a throw fails boot with the route named, before the transport opens.
+ *
+ * Deliberately a **separate** concept from {@link GatewayInterceptor}/{@link ConnectInterceptor}
+ * (Fab's explicit requirement): those are runtime, per-request/per-connect wrappers; this is
+ * boot-time, per-route, and never runs on the dispatch path. Different type, different configure slot,
+ * different lifecycle — do not conflate them. The gateway owns both halves of the walk (its routes and
+ * its validators), so a battery validates the exact routes it enforces with no app-side plumbing.
+ */
+export interface MetaValidator {
+  /** The `meta` key this validator owns (e.g. `"throttle"`). Only routes carrying it are validated. */
+  readonly namespace: string;
+  /** Throws a typed config error (route named) when `meta[namespace]` is invalid; returns otherwise. */
+  validate(routeId: string, meta: unknown): void;
+}
+
 /** Thrown by a `Validator` adapter when the input fails its schema. */
 export class ValidationError extends Error {
   constructor(message = "Input validation failed") {

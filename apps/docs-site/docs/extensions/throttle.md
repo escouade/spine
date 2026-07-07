@@ -244,19 +244,44 @@ gets a `429` envelope with `Retry-After`, exactly like a buffered route. Declare
 
 Boot fails on a bad **configure** policy out of the box (non-positive limit, duplicate name, `'ip'` on
 IPC, …). To also validate **route-inline** specs at startup — so a typo fails the boot, not the first
-dispatch — wire the gateway's readonly route snapshot:
+dispatch — place the throttle **meta validator** in the gateway's `metaValidators`, alongside the
+interceptor in `interceptors`, on the **same** gateway:
 
 ```typescript
-ThrottleModule.configure({
-  policies: {
+import {
+  throttleInterceptorRef,
+  throttleMetaValidatorRef,
+} from "@spinejs/throttle";
+
+HttpGatewayModule.configure({
+  imports: [
+    ThrottleModule.configure({
+      policies: {
+        /* ... */
+      },
+      ...throttleHttp(),
+    }),
+  ],
+  contextFactory: {
     /* ... */
   },
-  ...throttleHttp(),
-  routes: { inject: [HttpGateway], factory: (gw) => () => gw.routes },
+  interceptors: {
+    inject: [throttleInterceptorRef()],
+    factory: (throttle) => [throttle], // runtime enforcement (per request / per SSE connect)
+  },
+  metaValidators: {
+    inject: [throttleMetaValidatorRef()],
+    factory: (validator) => [validator], // boot-time validation of every route's `meta.throttle`
+  },
 });
 ```
 
-Both `HttpGateway.routes` and `ElectronIpcGateway.routes` expose the readonly snapshot the walk reads.
+`metaValidators` is a framework primitive ([`MetaValidator`](../gateway/interceptors.md#validate-route-meta-at-boot)):
+at start, the gateway crosses **its own** routes against **its own** validators and fails boot with the
+route named on any bad `meta.throttle` (an unwired `keyBy`, a `skip`/`override` naming an unknown
+default, an exotic `override` value). Because the validator lives on the gateway that _enforces_
+throttling, the validated routes are exactly the enforced routes — a multi-gateway app never
+cross-validates. Use the matching name for a named instance: `throttleMetaValidatorRef("public")`.
 
 ### Observe rejections
 
@@ -305,18 +330,21 @@ ThrottleModule.configure({
 
 ### `ThrottleModule.configure(options): DynamicModule`
 
-| Option           | Type                                   | Notes                                                                                         |
-| ---------------- | -------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `policies`       | `Record<string, ThrottlePolicy>`       | Gateway-default policies, keyed by unique name. Names may not contain `#`.                    |
-| `store`          | `ThrottleStore`                        | Custom store (e.g. Redis). Default: the built-in in-memory sliding-log store (module-owned).  |
-| `keySources`     | `Record<string, KeySelector>`          | Named sources a string `keyBy` resolves through (`'ip'`/`'sender'` from the presets).         |
-| `onLimitReached` | `(e: LimitReachedEvent) => void`       | Fired on every rejection: `{ policyName, routeId, keyHash, retryAfterMs }`.                   |
-| `onError`        | `(e: ThrottleErrorEvent) => void`      | Fired on a throwing selector / store failure (fail-closed **and** fail-open telemetry).       |
-| `onOutcome`      | `(ctx) => void`                        | Invoked once per dispatch after the outcome slot is written (the `./http` header translator). |
-| `emitRawKey`     | `boolean`                              | Also pass the raw pre-hash key to `onLimitReached`. Off by default (PII).                     |
-| `clock`          | `Clock`                                | Injectable time source for the default store (monotonic default) — deterministic tests.       |
-| `name`           | `string`                               | Instance name for multi-gateway apps; each name is fully isolated (config never merges).      |
-| `routes`         | `ProviderAdapter<RouteSnapshotSource>` | Wire `() => gateway.routes` to validate route-inline specs at boot.                           |
+| Option           | Type                              | Notes                                                                                         |
+| ---------------- | --------------------------------- | --------------------------------------------------------------------------------------------- |
+| `policies`       | `Record<string, ThrottlePolicy>`  | Gateway-default policies, keyed by unique name. Names may not contain `#`.                    |
+| `store`          | `ThrottleStore`                   | Custom store (e.g. Redis). Default: the built-in in-memory sliding-log store (module-owned).  |
+| `keySources`     | `Record<string, KeySelector>`     | Named sources a string `keyBy` resolves through (`'ip'`/`'sender'` from the presets).         |
+| `onLimitReached` | `(e: LimitReachedEvent) => void`  | Fired on every rejection: `{ policyName, routeId, keyHash, retryAfterMs }`.                   |
+| `onError`        | `(e: ThrottleErrorEvent) => void` | Fired on a throwing selector / store failure (fail-closed **and** fail-open telemetry).       |
+| `onOutcome`      | `(ctx) => void`                   | Invoked once per dispatch after the outcome slot is written (the `./http` header translator). |
+| `emitRawKey`     | `boolean`                         | Also pass the raw pre-hash key to `onLimitReached`. Off by default (PII).                     |
+| `clock`          | `Clock`                           | Injectable time source for the default store (monotonic default) — deterministic tests.       |
+| `name`           | `string`                          | Instance name for multi-gateway apps; each name is fully isolated (config never merges).      |
+
+To validate route-inline specs at boot, place `throttleMetaValidatorRef(name)` in the gateway's
+`metaValidators` (see [Validate route-inline specs at boot](#validate-route-inline-specs-at-boot)) —
+it is exported by `configure` next to `throttleInterceptorRef(name)`, not a `configure` option.
 
 ### `ThrottlePolicy`
 
