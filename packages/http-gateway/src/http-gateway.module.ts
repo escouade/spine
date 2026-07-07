@@ -15,6 +15,7 @@ import type {
   ProviderAdapter,
   Validator,
 } from "@spinejs/gateway-core";
+import type { MiddlewareHandler } from "hono";
 import { HttpGateway } from "./http.gateway";
 import type { HttpRoute } from "./http.gateway";
 import { ZodValidator } from "./zod.validator";
@@ -37,6 +38,9 @@ const metaValidatorsToken = new InjectionToken<MetaValidator[]>(
 const statusMapperToken = new InjectionToken<
   ((code: string) => number) | undefined
 >("http-gateway.status-mapper");
+const middlewareToken = new InjectionToken<MiddlewareHandler[]>(
+  "http-gateway.middleware"
+);
 const portToken = new InjectionToken<number | undefined>("http-gateway.port");
 const sseHeartbeatToken = new InjectionToken<number | undefined>(
   "http-gateway.sse-heartbeat"
@@ -53,6 +57,7 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
     { provide: interceptorsToken, value: [] },
     { provide: metaValidatorsToken, value: [] },
     { provide: statusMapperToken, value: undefined },
+    { provide: middlewareToken, value: [] },
     { provide: portToken, value: undefined },
     { provide: sseHeartbeatToken, value: undefined },
     {
@@ -64,6 +69,7 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
         interceptorsToken,
         statusMapperToken,
         sseHeartbeatToken,
+        middlewareToken,
       ],
       factory: (
         validator: Validator,
@@ -71,7 +77,8 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
         contextFactory: ContextFactory<HttpRaw, HttpBaseContext>,
         interceptors: ChainInterceptor<HttpBaseContext, string, HttpRoute>[],
         statusMapper: ((code: string) => number) | undefined,
-        sseHeartbeatMs: number | undefined
+        sseHeartbeatMs: number | undefined,
+        middleware: MiddlewareHandler[]
       ) =>
         new HttpGateway(
           validator,
@@ -79,7 +86,8 @@ const sseHeartbeatToken = new InjectionToken<number | undefined>(
           contextFactory,
           interceptors,
           statusMapper,
-          sseHeartbeatMs
+          sseHeartbeatMs,
+          middleware
         ),
     },
   ],
@@ -147,6 +155,13 @@ export class HttpGatewayModule implements OnStart, OnStop {
     metaValidators?: ProviderAdapter<MetaValidator[]>;
     /** Maps an `ErrorMapper` code to an HTTP status. Defaults to the built-in BAD_REQUEST/UNAUTHORIZED/INTERNAL_ERROR mapping. */
     statusMapper?: ProviderAdapter<(code: string) => number>;
+    /**
+     * App-level Hono middleware (helmet/compression/CORS…), outermost-first. Mounted on `gateway.app`
+     * in the gateway constructor — **before** any route is bound — so ordering is deterministic (Hono
+     * applies a middleware only to routes registered after it). Only applies to the DEFAULT gateway;
+     * when you pass a pre-built `gateway`, mount middleware on its `app` yourself. Default `[]`.
+     */
+    middleware?: ProviderAdapter<MiddlewareHandler[]>;
     port?: number;
     /** Interval (ms) between SSE keep-alive comments on a stream; `0` disables. Default 15_000. */
     sseHeartbeatMs?: number;
@@ -177,6 +192,7 @@ export class HttpGatewayModule implements OnStart, OnStop {
           statusMapperToken,
           options.statusMapper ?? { value: undefined }
         ),
+        toProvider(middlewareToken, options.middleware ?? { value: [] }),
         toProvider(portToken, { value: options.port }),
         toProvider(sseHeartbeatToken, { value: options.sseHeartbeatMs }),
         // `provide()` upserts by token, so an explicit gateway replaces the base factory below.

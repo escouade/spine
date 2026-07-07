@@ -99,7 +99,7 @@ The transport hands the pipeline a structured `{ params, query, body }`. Declare
 
 ## Middleware & CORS
 
-The gateway does not wrap CORS/logging/etc. — mount [Hono middleware](https://hono.dev/docs/middleware/builtin/cors) on the exposed `gateway.app` yourself. Build the `HttpGateway` in your composition root and pass it via `configure({ gateway })`; attach `app.use(...)` **before** registration.
+The gateway does not wrap CORS/logging/etc. Pass HTTP-native [Hono middleware](https://hono.dev/docs/middleware/builtin/cors) to `configure({ middleware: { value: [cors(), compress()] } })`, outermost-first — it mounts on `gateway.app` before any route binds, so ordering is deterministic. For **path-scoped** middleware (`app.use("/admin/*", …)`), build the `HttpGateway` yourself and pass it via `configure({ gateway })`, attaching `app.use(...)` before registration.
 
 ## Testing
 
@@ -134,6 +134,8 @@ Backpressure is bounded per subscriber (`maxQueuePerSubscriber`, default 1000, d
 | `contextFactory` | Yes\*    | —                        | Builds the app context from the Hono context.                                              |
 | `errorMapper`    | No       | `DefaultHttpErrorMapper` | Maps thrown errors to stable codes.                                                        |
 | `validator`      | No       | `ZodValidator`           | Validates the structured input.                                                            |
+| `interceptors`   | No       | `[]`                     | Cross-cutting wrappers around every dispatch (per-request; also SSE connect).              |
+| `middleware`     | No       | `[]`                     | HTTP-native Hono middleware (helmet/compression/CORS), outermost-first, before route bind. |
 | `statusMapper`   | No       | common codes → statuses  | Maps an error code to an HTTP status.                                                      |
 | `port`           | No       | `undefined`              | When set, `onStart()` calls `gateway.listen(port)`.                                        |
 | `sseHeartbeatMs` | No       | `15_000`                 | Keep-alive `: ping` interval for SSE streams (`0` disables).                               |
