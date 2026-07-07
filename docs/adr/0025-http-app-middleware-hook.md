@@ -60,8 +60,12 @@ limiting, CLS) is an interceptor.
   and the ordering constraint is enforced structurally (ctor-time) instead of by documentation.
 - **Positive**: order is explicit and deterministic — the array is the middleware stack, outermost-first,
   and it always precedes route binding.
-- **Neutral**: `middleware` mounts globally (`app.use(mw)`, all paths). Path-scoped middleware
-  (`app.use(path, mw)`) still needs the pre-built `gateway` path — an intentional simplicity trade for
-  the 90% case; documented.
+- **Neutral**: `middleware` mounts globally (`app.use(mw)`, all paths), so it also wraps SSE routes —
+  a response-buffering middleware (`compress()`) would break a stream. Path-scoped middleware
+  (`app.use(path, mw)`) — including scoping buffering middleware away from SSE — still needs the pre-built
+  `gateway` path — an intentional simplicity trade for the 90% case; both documented.
+- **Guard**: `configure({ gateway, middleware })` (both) throws — a pre-built gateway replaces the factory
+  that reads the middleware slot, so the option would be silently dropped. Failing loudly mirrors the
+  existing `gateway`-XOR-`contextFactory` validation.
 - **Negative / breaking**: none. The `HttpGateway` constructor gains a trailing optional arg (`middleware`,
   default `[]`); existing positional constructions are unaffected.
