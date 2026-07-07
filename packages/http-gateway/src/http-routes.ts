@@ -390,7 +390,7 @@ export const sse: SseRouteFn = <
   };
   // Namespaced battery meta (AD-3): identical to the verb helpers — the user's `throttle` fields are
   // copied VERBATIM under `meta.throttle` with `routeId = "GET /path"` stamped, so SSE routes carry
-  // route-level policies enforced by the throttle interceptor in the gateway's `connectInterceptors`.
+  // route-level policies enforced by the throttle interceptor at connect (via `ConnectInterceptor`).
   const throttleOption = (options as { throttle?: unknown }).throttle;
   if (
     throttleOption !== undefined &&

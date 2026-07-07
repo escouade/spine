@@ -12,7 +12,11 @@ import {
   ContextFactory,
   UnauthorizedError,
 } from "@spinejs/gateway-core";
-import type { Envelope, GatewayInterceptor } from "@spinejs/gateway-core";
+import type {
+  ConnectInterceptor,
+  Envelope,
+  GatewayInterceptor,
+} from "@spinejs/gateway-core";
 import {
   readResponseHeadersBag,
   type HttpAddress,
@@ -45,15 +49,18 @@ export class HttpGateway<
   /** Every route registered so far, accumulated across `register()` calls (one call per feature module). */
   private readonly _routes: HttpRoute<Ctx>[] = [];
   /**
-   * Interceptors run in `dispatchSse` at **connection time**, before guards (AD-6). The variance
-   * assertion mirrors `DispatchPipeline`'s: a transport-agnostic base `GatewayInterceptor` (the
-   * `ChainInterceptor` union's second member) only touches `ctx`/`next`, so it is runtime-safe here.
+   * The subset of `interceptors` that also implement {@link ConnectInterceptor} — derived once in the
+   * constructor. They run in `dispatchSse` at **connection time**, before guards (AD-6). Deriving from
+   * the single `interceptors` list (not a second wiring slot) means a connect-capable interceptor is
+   * enforced at connect with no extra wiring, while a request-only one (a UoW) is structurally
+   * excluded. The intersection type is sound: every element passed the `interceptConnect` filter.
    */
-  private readonly connectInterceptors: GatewayInterceptor<
+  private readonly connectInterceptors: (GatewayInterceptor<
     Ctx,
     Code,
     HttpRoute<Ctx>
-  >[];
+  > &
+    ConnectInterceptor<Ctx, Code, HttpRoute<Ctx>>)[];
 
   constructor(
     private readonly validator: Validator,
@@ -64,27 +71,27 @@ export class HttpGateway<
       code: Code
     ) => number = defaultStatusMapper as (code: Code) => number,
     /** Interval (ms) between SSE keep-alive comments on a stream; `0` disables. */
-    private readonly sseHeartbeatMs = 15_000,
-    /**
-     * SSE connection-attempt enforcement (AD-6): interceptors run in `dispatchSse` **before** guards.
-     * An allowed connect resolves `next()` to a synthetic accept envelope before the stream opens; a
-     * deny short-circuits with a failure envelope (mapped through `statusMapper` + the header bag).
-     * The app passes the SAME throttle interceptor instance here and in `interceptors` — one engine,
-     * one store. The main `interceptors` array keeps its ADR-0017 no-SSE behavior (it never runs on
-     * a stream; `dispatchSse` bypasses the buffered pipeline).
-     */
-    connectInterceptors: ChainInterceptor<Ctx, Code, HttpRoute<Ctx>>[] = []
+    private readonly sseHeartbeatMs = 15_000
   ) {
     this.pipeline = new DispatchPipeline<Ctx, Code, HttpRoute<Ctx>>(
       this.validator,
       this.errorMapper,
       interceptors
     );
-    this.connectInterceptors = connectInterceptors as GatewayInterceptor<
-      Ctx,
-      Code,
-      HttpRoute<Ctx>
-    >[];
+    // SSE connect enforcement (Design 4′): derive the connect chain from the SAME `interceptors` list
+    // — every interceptor that implements `ConnectInterceptor` (capability by method presence), in
+    // registration order. A request-only interceptor (no `interceptConnect`) is never included, so a
+    // request-scoped resource (a UoW transaction) cannot be held open for a stream, by construction.
+    this.connectInterceptors = (
+      interceptors as GatewayInterceptor<Ctx, Code, HttpRoute<Ctx>>[]
+    ).filter(
+      (
+        i
+      ): i is GatewayInterceptor<Ctx, Code, HttpRoute<Ctx>> &
+        ConnectInterceptor<Ctx, Code, HttpRoute<Ctx>> =>
+        typeof (i as Partial<ConnectInterceptor>).interceptConnect ===
+        "function"
+    );
   }
 
   /**
@@ -216,7 +223,7 @@ export class HttpGateway<
     });
     const chain = this.connectInterceptors.reduceRight(
       (next, interceptor) => () =>
-        interceptor.intercept(route, ctx, rawInput, next),
+        interceptor.interceptConnect(route, ctx, rawInput, next),
       accept
     );
     try {

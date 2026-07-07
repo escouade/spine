@@ -221,9 +221,9 @@ pouvant retourner `null`.
 
 ### Appliquer aux connexions SSE
 
-Le tableau `interceptors` principal ne s'exécute jamais sur un flux SSE (ADR 0017). Pour compter les
-**tentatives de connexion** SSE dans votre quota, passez la même instance d'intercepteur au slot
-`connectInterceptors` de http-gateway — un moteur, un store :
+Le tableau `interceptors` principal ne s'exécute jamais sur un flux SSE (ADR 0017) — mais l'intercepteur
+de throttle implémente `ConnectInterceptor`, donc la **même instance** placée dans `interceptors` est
+automatiquement exécutée lors de la **tentative de connexion** SSE. Rien de plus à câbler :
 
 ```typescript
 HttpGatewayModule.configure({
@@ -235,18 +235,16 @@ HttpGatewayModule.configure({
   },
   interceptors: {
     inject: [throttleInterceptorRef()],
-    factory: (throttle) => [throttle],
-  },
-  connectInterceptors: {
-    inject: [throttleInterceptorRef()],
-    factory: (throttle) => [throttle], // le MÊME token → la MÊME instance
+    factory: (throttle) => [throttle], // appliqué à la requête ET à la connexion SSE — un moteur, un store
   },
 });
 ```
 
 La tentative de connexion est appliquée avant les guards ; les **événements** du flux ne sont jamais
 comptés. Une connexion refusée reçoit une enveloppe `429` avec `Retry-After`, exactement comme une route
-bufferisée. Déclarez la politique d'un flux avec `sse("/stream", { throttle: { ... } }, fn)`.
+bufferisée. Déclarez la politique d'un flux avec `sse("/stream", { throttle: { ... } }, fn)`. Un
+intercepteur limité à la requête (qui n'implémente pas `ConnectInterceptor`, ex. un unit-of-work tenant
+une transaction) n'est jamais exécuté à la connexion.
 
 ### Valider les specs route-inline au boot
 

@@ -57,6 +57,31 @@ import type { ChainInterceptor } from "@spinejs/gateway-core";
 
 C'est pourquoi `configure({ interceptors: [new ClsInterceptor(cls), ormInterceptor] })` type-check sans `as`, alors même que `ormInterceptor` est typé sur le `GatewayContext` de base et que le slot est restreint à la route du transport.
 
+## Appliquer à la connexion (SSE)
+
+Un flux SSE HTTP contourne le pipeline `interceptors` bufferisé (un flux est plusieurs valeurs, pas une seule `Envelope` — voir [ADR 0017](https://github.com/escouade/spine/blob/main/docs/adr/0017-sse-fan-out-in-http-gateway.md)). Un intercepteur qui doit aussi agir sur la **tentative de connexion** — ex. limiter le débit d'un connect — s'y inscrit en implémentant `ConnectInterceptor` en plus de `GatewayInterceptor` :
+
+```typescript
+import type {
+  GatewayInterceptor,
+  ConnectInterceptor,
+} from "@spinejs/gateway-core";
+
+class ThrottleInterceptor implements GatewayInterceptor, ConnectInterceptor {
+  intercept(target, ctx, rawInput, next) {
+    return this.gate(target, ctx, rawInput, next);
+  }
+  interceptConnect(target, ctx, rawInput, next) {
+    return this.gate(target, ctx, rawInput, next); // même logique, exécutée à la connexion
+  }
+  private gate(target, ctx, rawInput, next) {
+    /* refuser → retourner une enveloppe d'échec ; ou `return next()` pour autoriser la connexion */
+  }
+}
+```
+
+La gateway HTTP dérive sa chaîne de connexion depuis la **même** liste `interceptors`, filtrée sur ceux qui implémentent `interceptConnect` — vous câblez donc l'intercepteur **une seule fois**. Un intercepteur qui n'implémente **pas** `ConnectInterceptor` (un `MikroOrmInterceptor` request-scoped, dont la transaction ne doit pas couvrir un flux long) n'est jamais exécuté à la connexion, par construction. À la connexion, `next()` résout un accept synthétique — il n'y a pas de handler en aval — donc court-circuitez pour refuser, ou appelez `next()` pour autoriser.
+
 ## Ordre d'exécution
 
 Les intercepteurs sont chaînés dans l'ordre d'enregistrement. Le premier intercepteur du tableau est l'enveloppe la plus externe — il s'exécute en premier à l'aller et en dernier au retour :

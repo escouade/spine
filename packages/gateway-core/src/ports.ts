@@ -71,6 +71,41 @@ export interface GatewayInterceptor<
 }
 
 /**
+ * Opt-in capability marker for an interceptor that ALSO enforces at a transport's **connection**
+ * phase (e.g. an SSE connect on the HTTP gateway), not just per-request dispatch. Kept separate from
+ * {@link GatewayInterceptor} on purpose: the shared cross-transport port stays a single method
+ * forever, and every phase a transport adds owns its own marker (a future WebSocket gateway would
+ * ship, say, `WsMessageInterceptor`). Presence of the method IS the opt-in — an interceptor that must
+ * NOT run at connect (a request-scoped unit-of-work holding a DB transaction) simply omits
+ * `interceptConnect`, so a connect chain filtered on it can never pull it in. The exclusion is
+ * structural, not a convention.
+ *
+ * The signature mirrors `intercept` — there is no distinct "connect shape": short-circuit with a
+ * failure envelope to DENY the connection, or call `next()` to ALLOW it. At connect, `next()` resolves
+ * to a synthetic accept (there is no downstream handler), so do NOT do post-`next()` work that assumes
+ * a real response.
+ *
+ * @example
+ * class ThrottleInterceptor implements GatewayInterceptor, ConnectInterceptor {
+ *   intercept(t, c, i, next)        { return this.gate(t, c, i, next); }
+ *   interceptConnect(t, c, i, next) { return this.gate(t, c, i, next); } // same logic, one entry per phase
+ *   private gate(t, c, i, next) { ... }
+ * }
+ */
+export interface ConnectInterceptor<
+  Ctx extends GatewayContext = GatewayContext,
+  Code extends string = string,
+  Target extends DispatchTarget<Ctx> = DispatchTarget<Ctx>
+> {
+  interceptConnect(
+    target: Target,
+    ctx: Ctx,
+    rawInput: unknown,
+    next: () => Promise<Envelope<unknown, Code>>
+  ): Promise<Envelope<unknown, Code>>;
+}
+
+/**
  * An interceptor usable in a chain narrowed to `<Ctx, Code, Route>`: either one typed for exactly that
  * transport (it may read the route's `address`/`meta`), or a **transport-agnostic** base
  * `GatewayInterceptor` that only touches `ctx`/`next` — e.g. `ClsInterceptor`, `MikroOrmInterceptor`.

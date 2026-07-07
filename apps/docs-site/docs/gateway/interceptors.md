@@ -56,6 +56,31 @@ import type { ChainInterceptor } from "@spinejs/gateway-core";
 
 This is why `configure({ interceptors: [new ClsInterceptor(cls), ormInterceptor] })` type-checks with no `as`, even though `ormInterceptor` is typed at the base `GatewayContext` and the slot is narrowed to the transport's route.
 
+## Enforcing at connect (SSE)
+
+An HTTP SSE stream bypasses the buffered `interceptors` pipeline (a stream is many values, not one `Envelope` — see [ADR 0017](https://github.com/escouade/spine/blob/main/docs/adr/0017-sse-fan-out-in-http-gateway.md)). An interceptor that must also act on the **connection attempt** — e.g. rate-limiting a connect — opts in by implementing `ConnectInterceptor` alongside `GatewayInterceptor`:
+
+```typescript
+import type {
+  GatewayInterceptor,
+  ConnectInterceptor,
+} from "@spinejs/gateway-core";
+
+class ThrottleInterceptor implements GatewayInterceptor, ConnectInterceptor {
+  intercept(target, ctx, rawInput, next) {
+    return this.gate(target, ctx, rawInput, next);
+  }
+  interceptConnect(target, ctx, rawInput, next) {
+    return this.gate(target, ctx, rawInput, next); // same logic, run at connect
+  }
+  private gate(target, ctx, rawInput, next) {
+    /* deny → return a failure envelope; or `return next()` to allow the connection */
+  }
+}
+```
+
+The HTTP gateway derives its connect chain from the **same** `interceptors` list, filtered to those implementing `interceptConnect` — so you wire the interceptor **once**. An interceptor that does **not** implement `ConnectInterceptor` (a request-scoped `MikroOrmInterceptor`, whose transaction must not span a long-lived stream) is never run at connect, by construction. At connect, `next()` resolves to a synthetic accept — there is no downstream handler — so short-circuit to deny, or call `next()` to allow.
+
 ## Execution order
 
 Interceptors are chained in registration order. The first interceptor in the array is the outermost wrapper — it runs first on the way in and last on the way out:

@@ -36,9 +36,10 @@ declare module "@spinejs/http-gateway" {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface SseRouteOptions<P, Q> {
     /**
-     * Rate-limit policy for this SSE stream: the connection attempt is enforced by the throttle
-     * interceptor placed in the gateway's `connectInterceptors` slot (AD-6). Same option shape as a
-     * verb route — inline `policies`, `skip`, `override`, or `false`. Stream events are never counted.
+     * Rate-limit policy for this SSE stream: the connection attempt is enforced at connect by the
+     * throttle interceptor (it implements `ConnectInterceptor`, so the same instance in the gateway's
+     * `interceptors` runs at connect, AD-6). Same option shape as a verb route — inline `policies`,
+     * `skip`, `override`, or `false`. Stream events are never counted.
      */
     throttle?: ThrottleRouteOption | false;
   }
