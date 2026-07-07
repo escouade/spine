@@ -25,10 +25,15 @@ export type {
   ErrorMapper,
   GatewayInterceptor,
   MetaValidator,
+  RequestScoped,
   SchemaConverter,
   Validator,
 } from "./ports";
 export { validateRouteMeta } from "./meta-validator";
+export {
+  assertConnectInterceptorsSafe,
+  isConnectInterceptor,
+} from "./connect-safety";
 export {
   gatewayFeatureFactory,
   gatewayModuleDecorator,

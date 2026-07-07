@@ -104,8 +104,8 @@ error would require a second typed slot, which is the very double-wiring we remo
 
 **Residual**: presence proves _intent to run at connect_, not _connect-safety_. Nothing stops a future author
 adding `interceptConnect` to a request-scoped interceptor. The type system provably cannot close this (see §Honest
-framing); a boot-assert flagging any `requestScoped` interceptor that exposes `interceptConnect` is deferred to the
-`MetaValidator` framework story.
+framing); a boot-assert flagging any `requestScoped` interceptor that exposes `interceptConnect` closes it at boot
+instead — shipped in [ADR 0024](0024-connect-safety-boot-assert.md).
 
 ## Alternatives considered
 
@@ -145,4 +145,5 @@ framing); a boot-assert flagging any `requestScoped` interceptor that exposes `i
   rare and the workaround is one line (documented in `gateway/interceptors.md`).
 - **Caution**: the marker proves intent to run at connect, not connect-safety; a request-scoped interceptor that
   wrongly implements `interceptConnect` is still expressible — including via **inheritance** (a subclass of a
-  connect-capable base is pulled in silently). Closing that hole is the deferred `MetaValidator` boot-assert.
+  connect-capable base is pulled in silently). Closing that hole is the `requestScoped` boot-assert of
+  [ADR 0024](0024-connect-safety-boot-assert.md).

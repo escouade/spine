@@ -7,6 +7,7 @@ import {
 } from "@mikro-orm/core";
 import { BetterSqliteDriver } from "@mikro-orm/better-sqlite";
 import { ClsService, ClsInterceptor } from "@spinejs/cls";
+import { assertConnectInterceptorsSafe } from "@spinejs/gateway-core";
 import type {
   ChainInterceptor,
   DispatchTarget,
@@ -248,5 +249,28 @@ describe("MikroOrmInterceptor — request-scoped transactional EM (Story 1.3)", 
     ).rejects.toThrow(/active CLS scope/);
     // The actionable message is surfaced (logged), not swallowed into a generic pipeline code.
     expect(errors.some((m) => /ClsInterceptor/.test(m))).toBe(true);
+  });
+});
+
+describe("MikroOrmInterceptor — connect-safety marker (ADR 0024)", () => {
+  it("declares requestScoped, so a gateway boot-assert catches it if it ever gained interceptConnect", () => {
+    // Constructing is enough — the constructor only stores; we assert the static marker, not behavior.
+    const interceptor = new MikroOrmInterceptor(
+      {} as unknown as MikroORM,
+      {} as unknown as ClsService,
+      silentLogger
+    );
+    expect(interceptor.requestScoped).toBe(true);
+  });
+
+  it("carries no interceptConnect today → the real UoW wiring passes the connect-safety boot-assert", () => {
+    // The marker is the belt to the suspenders: the UoW is already excluded from the connect chain by
+    // having no interceptConnect (ADR 0022). Prove the guard does not false-positive on the real thing.
+    const interceptor = new MikroOrmInterceptor(
+      {} as unknown as MikroORM,
+      {} as unknown as ClsService,
+      silentLogger
+    );
+    expect(() => assertConnectInterceptorsSafe([interceptor])).not.toThrow();
   });
 });

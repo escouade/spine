@@ -106,6 +106,34 @@ export interface ConnectInterceptor<
 }
 
 /**
+ * A self-declaration that an interceptor holds a **request-scoped resource** — a DB transaction, a CLS
+ * scope, anything whose lifetime must be exactly one request/response (e.g. `MikroOrmInterceptor`'s
+ * unit-of-work). It exists to close the one residual of {@link ConnectInterceptor}: presence of
+ * `interceptConnect` proves *intent to run at connect*, not *connect-safety*. A stream lives for the
+ * connection's lifetime, so a request-scoped resource pulled into the connect phase (a transaction held
+ * open across a multi-minute SSE stream) is a leak the type system provably cannot forbid — capability
+ * is one heterogeneous `interceptors` list, so exclusion is a runtime filter (ADR 0022 §Honest framing).
+ *
+ * This marker turns that latent leak into a **boot failure**: a transport that derives a connect chain
+ * ({@link assertConnectInterceptorsSafe}) rejects, at construction, any interceptor that is BOTH
+ * `requestScoped` AND connect-capable — including one that inherits `interceptConnect` from a
+ * connect-capable base (the inheritance hole named in ADR 0022 §Consequences). A connect-safe
+ * interceptor (throttle: a shared engine + store, nothing per-request) simply omits the marker.
+ *
+ * The literal `true` (not `boolean`) makes the declaration unambiguous — an interceptor either states
+ * `readonly requestScoped = true` or carries no marker; there is no `requestScoped: false` middle state.
+ *
+ * @example
+ * class MikroOrmInterceptor implements GatewayInterceptor, RequestScoped {
+ *   readonly requestScoped = true; // forks a per-request EntityManager → must never run at connect
+ *   async intercept(t, c, i, next) { ... }
+ * }
+ */
+export interface RequestScoped {
+  readonly requestScoped: true;
+}
+
+/**
  * An interceptor usable in a chain narrowed to `<Ctx, Code, Route>`: either one typed for exactly that
  * transport (it may read the route's `address`/`meta`), or a **transport-agnostic** base
  * `GatewayInterceptor` that only touches `ctx`/`next` — e.g. `ClsInterceptor`, `MikroOrmInterceptor`.

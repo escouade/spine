@@ -84,6 +84,23 @@ La gateway HTTP dérive sa chaîne de connexion depuis la **même** liste `inter
 
 Un intercepteur qui ne doit agir **qu'**à la connexion (rien sur les requêtes bufferisées) vit quand même dans la liste `interceptors` : donnez-lui donc une méthode de requête pass-through — `intercept(t, c, i, next) { return next(); }`. L'application à la connexion est un sous-ensemble d'`interceptors`, pas une liste indépendante.
 
+### Marquer un intercepteur request-scoped
+
+Implémenter `interceptConnect` dit « exécute-moi à la connexion » — ça ne dit **pas** que c'est _sûr_. Un intercepteur qui détient une **ressource par requête** (une transaction DB, un scope CLS) ne doit jamais s'exécuter à la connexion : un flux garderait cette ressource ouverte pour toute la durée de la connexion. Déclarez-le `RequestScoped` pour que la gateway refuse de démarrer s'il devient un jour aussi connect-capable :
+
+```typescript
+import type { GatewayInterceptor, RequestScoped } from "@spinejs/gateway-core";
+
+class MikroOrmInterceptor implements GatewayInterceptor, RequestScoped {
+  readonly requestScoped = true; // forke un EntityManager par requête → ne doit jamais tourner à la connexion
+  async intercept(target, ctx, rawInput, next) {
+    /* ouvre l'unit-of-work, exécute, flush une fois */
+  }
+}
+```
+
+La gateway HTTP exécute un boot-assert en dérivant sa chaîne de connexion : tout intercepteur **à la fois** `requestScoped` **et** connect-capable (implémente `interceptConnect`, directement ou hérité d'une base connect-capable) fait échouer le démarrage avec une erreur nommée et actionnable — jamais une transaction fuitée silencieusement au premier flux. Un intercepteur connect-safe comme `ThrottleInterceptor` (un engine + store partagés, rien par requête) ne porte **aucun** marqueur et s'applique à la connexion sans être affecté. Voir [ADR 0024](https://github.com/escouade/spine/blob/main/docs/adr/0024-connect-safety-boot-assert.md).
+
 ## Valider le meta des routes au boot
 
 Les intercepteurs s'exécutent à la **requête**. Une primitive séparée et complémentaire — `MetaValidator` — s'exécute au **boot** : elle valide la tranche namespacée du `meta` de chaque route (ex. `meta.throttle`) pour qu'une coquille échoue au démarrage, pas au premier dispatch. C'est un concept **différent** d'un intercepteur (type différent, slot différent, cycle de vie différent) — ne confondez pas les deux.
