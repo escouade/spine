@@ -11,6 +11,8 @@ import {
   ChainInterceptor,
   ContextFactory,
   UnauthorizedError,
+  assertConnectInterceptorsSafe,
+  isConnectInterceptor,
 } from "@spinejs/gateway-core";
 import type {
   ConnectInterceptor,
@@ -78,20 +80,18 @@ export class HttpGateway<
       this.errorMapper,
       interceptors
     );
+    // SSE connect safety (ADR 0024): fail boot BEFORE deriving the chain if a `requestScoped`
+    // interceptor (a UoW) also declares `interceptConnect`. The capability marker (ADR 0022) proves
+    // intent to run at connect, not connect-safety; this closes that residual — including a subclass
+    // that inherits `interceptConnect` from a connect-capable base.
+    assertConnectInterceptorsSafe(interceptors);
     // SSE connect enforcement (Design 4′): derive the connect chain from the SAME `interceptors` list
     // — every interceptor that implements `ConnectInterceptor` (capability by method presence), in
     // registration order. A request-only interceptor (no `interceptConnect`) is never included, so a
     // request-scoped resource (a UoW transaction) cannot be held open for a stream, by construction.
     this.connectInterceptors = (
       interceptors as GatewayInterceptor<Ctx, Code, HttpRoute<Ctx>>[]
-    ).filter(
-      (
-        i
-      ): i is GatewayInterceptor<Ctx, Code, HttpRoute<Ctx>> &
-        ConnectInterceptor<Ctx, Code, HttpRoute<Ctx>> =>
-        typeof (i as Partial<ConnectInterceptor>).interceptConnect ===
-        "function"
-    );
+    ).filter(isConnectInterceptor);
   }
 
   /**

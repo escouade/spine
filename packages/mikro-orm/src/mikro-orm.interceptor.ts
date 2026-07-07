@@ -6,6 +6,7 @@ import type {
   Envelope,
   GatewayContext,
   GatewayInterceptor,
+  RequestScoped,
 } from "@spinejs/gateway-core";
 import { EM, WROTE } from "./mikro-orm.options";
 
@@ -40,7 +41,18 @@ const CONTEXT = "MikroOrmInterceptor";
  * makes writing more than one connection in a request throw, unless **every** written connection opted
  * into best-effort `multiWrite`.
  */
-export class MikroOrmInterceptor implements GatewayInterceptor {
+export class MikroOrmInterceptor implements GatewayInterceptor, RequestScoped {
+  /**
+   * Declares this interceptor holds a per-request resource (the forked `EntityManager` / its
+   * unit-of-work). It brackets exactly one dispatch and must never run at a transport's connection
+   * phase — a stream would hold the fork (and its implicit transaction) open for its whole lifetime.
+   * The marker makes the HTTP gateway's connect-safety boot-assert (ADR 0024) fail boot if this
+   * interceptor ever also gained `interceptConnect`, so the leak can't slip in silently. Today it has
+   * no `interceptConnect`, so it is already excluded from the connect chain by construction (ADR 0022);
+   * the marker is the belt to that suspenders, and guards the inheritance case too.
+   */
+  readonly requestScoped = true;
+
   constructor(
     private readonly orm: MikroORM,
     private readonly cls: ClsService,

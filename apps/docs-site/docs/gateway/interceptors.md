@@ -83,6 +83,23 @@ The HTTP gateway derives its connect chain from the **same** `interceptors` list
 
 An interceptor that should act **only** at connect (nothing on buffered requests) still lives in the `interceptors` list, so give it a pass-through request method: `intercept(t, c, i, next) { return next(); }`. Connect-phase enforcement is a subset of `interceptors`, not an independent list.
 
+### Marking a request-scoped interceptor
+
+Implementing `interceptConnect` says "run me at connect" — it does **not** say doing so is _safe_. An interceptor that holds a **per-request resource** (a DB transaction, a CLS scope) must never run at connect: a stream would pin that resource for the whole connection. Declare it `RequestScoped` so the gateway refuses to boot if it is ever also connect-capable:
+
+```typescript
+import type { GatewayInterceptor, RequestScoped } from "@spinejs/gateway-core";
+
+class MikroOrmInterceptor implements GatewayInterceptor, RequestScoped {
+  readonly requestScoped = true; // forks a per-request EntityManager → must never run at connect
+  async intercept(target, ctx, rawInput, next) {
+    /* open the unit-of-work, run, flush once */
+  }
+}
+```
+
+The HTTP gateway runs a boot-assert while deriving its connect chain: any interceptor that is **both** `requestScoped` **and** connect-capable (implements `interceptConnect`, directly or inherited from a connect-capable base) fails startup with a named, actionable error — never a silent leaked transaction on the first stream. A connect-safe interceptor like `ThrottleInterceptor` (a shared engine + store, nothing per-request) carries **no** marker and enforces at connect unaffected. See [ADR 0024](https://github.com/escouade/spine/blob/main/docs/adr/0024-connect-safety-boot-assert.md).
+
 ## Validate route meta at boot
 
 Interceptors run at **request time**. A separate, complementary primitive — `MetaValidator` — runs at **boot time**: it validates a battery's namespaced slice of each route's `meta` (e.g. `meta.throttle`) so a typo fails startup, not the first dispatch. It is a **different** concept from an interceptor (different type, different slot, different lifecycle) — do not conflate the two.
