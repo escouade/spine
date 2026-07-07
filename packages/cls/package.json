@@ -1,6 +1,6 @@
 {
   "name": "@spinejs/cls",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Per-request context for SpineJS via AsyncLocalStorage (CLS).",
   "keywords": [
     "spinejs",

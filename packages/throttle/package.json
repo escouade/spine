@@ -1,6 +1,6 @@
 {
   "name": "@spinejs/throttle",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Rate-limiting battery for SpineJS: exact sliding-window policies enforced as a gateway interceptor, transport-blind core with HTTP and electron-ipc presets.",
   "keywords": [
     "spinejs",

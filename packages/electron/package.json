@@ -1,6 +1,6 @@
 {
   "name": "@spinejs/electron",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Electron main-process integration for SpineJS.",
   "keywords": [
     "spinejs",

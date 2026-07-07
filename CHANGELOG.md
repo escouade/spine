@@ -1,3 +1,47 @@
+## 0.1.5 (2026-07-07)
+
+### 🚀 Features
+
+- ⚠️  **gateway:** ConnectInterceptor capability marker for SSE connect enforcement (Design 4′) ([ae8dd2d](https://github.com/escouade/spine/commit/ae8dd2d))
+- ⚠️  **gateway:** MetaValidator — boot-time route-meta validation primitive ([e2692b5](https://github.com/escouade/spine/commit/e2692b5))
+
+### 🩹 Fixes
+
+- **throttle:** malformed route-inline meta throws ThrottleConfigError, not TypeError (post-merge review #38) ([#38](https://github.com/escouade/spine/issues/38))
+- **throttle:** close policies-entry, routeId & proto-chain gaps in meta guard (PR #40 self-review) ([#40](https://github.com/escouade/spine/issues/40))
+- **throttle:** harden override proto-chain on the enforcement path + cover it (round-2 review) ([127aec6](https://github.com/escouade/spine/commit/127aec6))
+
+### ⚠️  Breaking Changes
+
+- **gateway:** `ThrottleModule.configure({ routes })` and the exported ([e2692b5](https://github.com/escouade/spine/commit/e2692b5))
+
+  `RouteSnapshot`/`RouteSnapshotSource` types are removed (0.x, no known consumers).
+  Wire `throttleMetaValidatorRef()` into the gateway's `metaValidators` instead.
+  - ADR 0023; docs EN+FR (throttle page + gateway/interceptors MetaValidator section)
+  - connect-safety boot-assert (a request-scoped interceptor exposing interceptConnect)
+    stays a separate follow-up, out of scope here
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+- **gateway:** `HttpGatewayModule.configure({ connectInterceptors })` is removed ([ae8dd2d](https://github.com/escouade/spine/commit/ae8dd2d))
+
+  (0.x, zero known consumers). Wire the interceptor once in `interceptors`; it runs
+  at connect iff it implements `ConnectInterceptor`.
+  - gateway-core: export `ConnectInterceptor`, kept separate from `GatewayInterceptor`
+    so the shared cross-transport port stays one method (future phases add their own
+    markers)
+  - http-gateway: derive + memoize the connect chain via a
+    `typeof interceptConnect === "function"` filter; invoke it on the instance
+    (this-safe); drop the `connectInterceptors` slot
+  - throttle: `ThrottleInterceptor implements GatewayInterceptor, ConnectInterceptor`,
+    both delegating to a shared `gate()` (one engine, one store)
+  - ADR 0022 (amends 0017 §3); docs EN+FR (interceptors + throttle SSE)
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+### ❤️ Thank You
+
+- Claude Fable 5
+- Claude Opus 4.8 (1M context)
+- Fabien Metais @metaisfabien
+
 ## 0.1.4 (2026-07-06)
 
 ### 🚀 Features

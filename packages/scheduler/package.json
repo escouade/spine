@@ -1,6 +1,6 @@
 {
   "name": "@spinejs/scheduler",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "CLS-scoped periodic task scheduling for SpineJS — each tick runs as a synthetic request.",
   "keywords": [
     "spinejs",
