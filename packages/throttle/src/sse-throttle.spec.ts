@@ -9,6 +9,8 @@ import "./http"; // loads the http-gateway `throttle` augmentation (verb + sse o
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Controller, getRoutes } from "@spinejs/gateway-core";
 import type {
+  ConnectInterceptor,
+  Envelope,
   GatewayContext,
   GatewayInterceptor,
   Guard,
@@ -144,15 +146,23 @@ describe("SSE connect enforcement via ConnectInterceptor (Design 4′)", () => {
     expect(third.status).toBe(429);
   });
 
-  it("excludes a request-only interceptor from the connect chain (structural, Design 4′)", async () => {
+  it("excludes a request-only interceptor from the connect chain, runs the connect-capable one (Design 4′)", async () => {
     const hub = new SseHub<string>();
     let requestOnlyCalls = 0;
+    let connectCalls = 0;
     // A plain `GatewayInterceptor` with NO `interceptConnect` — e.g. a request-scoped UoW. It must
-    // never run at connect: the gateway filters the connect chain on `interceptConnect` presence, and
-    // the SSE path bypasses the buffered `interceptors` pipeline entirely (ADR-0017).
+    // never run at connect: the gateway filters the connect chain on `interceptConnect` presence.
     const requestOnly: GatewayInterceptor = {
       intercept: (_t, _c, _i, next) => {
         requestOnlyCalls += 1;
+        return next();
+      },
+    };
+    // A connect-capable spy: the filter must INCLUDE it and the stream must open.
+    const connectSpy: GatewayInterceptor & ConnectInterceptor = {
+      intercept: (_t, _c, _i, next) => next(),
+      interceptConnect: (_t, _c, _i, next) => {
+        connectCalls += 1;
         return next();
       },
     };
@@ -160,14 +170,53 @@ describe("SSE connect enforcement via ConnectInterceptor (Design 4′)", () => {
       new ZodValidator(),
       new DefaultHttpErrorMapper(),
       contextFactory,
-      [requestOnly, throttleInterceptor(5)], // one list: only the throttle interceptor is connect-capable
+      [requestOnly, connectSpy], // one list: only `connectSpy` is connect-capable
       undefined,
       0
     );
     gw.register(streamRoutes(hub));
 
-    opened.push(await gw.app.request("/stream"));
-    expect(requestOnlyCalls).toBe(0); // request-only interceptor never touched the connection
+    const res = await gw.app.request("/stream");
+    opened.push(res);
+    // A broken filter that ran ALL interceptors at connect would call `requestOnly.interceptConnect`
+    // (undefined) → runConnect throws → 500. Asserting the stream opens is what catches that.
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    expect(connectCalls).toBe(1); // connect-capable interceptor ran at connect exactly once
+    expect(requestOnlyCalls).toBe(0); // request-only never touched the connection
+  });
+
+  it("runs connect interceptors in registration order — an outer deny short-circuits the inner", async () => {
+    const hub = new SseHub<string>();
+    let innerCalls = 0;
+    // Registered first = outermost: its deny must short-circuit before the inner interceptor runs.
+    const outerDeny: GatewayInterceptor & ConnectInterceptor = {
+      intercept: (_t, _c, _i, next) => next(),
+      interceptConnect: async (): Promise<Envelope<unknown, string>> => ({
+        ok: false,
+        code: "BAD_REQUEST",
+      }),
+    };
+    const inner: GatewayInterceptor & ConnectInterceptor = {
+      intercept: (_t, _c, _i, next) => next(),
+      interceptConnect: (_t, _c, _i, next) => {
+        innerCalls += 1;
+        return next();
+      },
+    };
+    const gw = new HttpGateway(
+      new ZodValidator(),
+      new DefaultHttpErrorMapper(),
+      contextFactory,
+      [outerDeny, inner],
+      undefined,
+      0
+    );
+    gw.register(streamRoutes(hub));
+
+    const res = await gw.app.request("/stream");
+    expect(res.status).toBe(400); // outer's BAD_REQUEST — no stream
+    expect(innerCalls).toBe(0); // outer short-circuited before the inner ever ran
   });
 
   it("shares one engine + store across dispatch and connect from a single list (no double count)", async () => {

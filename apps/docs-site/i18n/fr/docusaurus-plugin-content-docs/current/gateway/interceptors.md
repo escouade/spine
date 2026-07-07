@@ -80,7 +80,9 @@ class ThrottleInterceptor implements GatewayInterceptor, ConnectInterceptor {
 }
 ```
 
-La gateway HTTP dérive sa chaîne de connexion depuis la **même** liste `interceptors`, filtrée sur ceux qui implémentent `interceptConnect` — vous câblez donc l'intercepteur **une seule fois**. Un intercepteur qui n'implémente **pas** `ConnectInterceptor` (un `MikroOrmInterceptor` request-scoped, dont la transaction ne doit pas couvrir un flux long) n'est jamais exécuté à la connexion, par construction. À la connexion, `next()` résout un accept synthétique — il n'y a pas de handler en aval — donc court-circuitez pour refuser, ou appelez `next()` pour autoriser.
+La gateway HTTP dérive sa chaîne de connexion depuis la **même** liste `interceptors`, filtrée sur ceux qui implémentent `interceptConnect` — vous câblez donc l'intercepteur **une seule fois**. Un intercepteur qui n'implémente **pas** `ConnectInterceptor` (un `MikroOrmInterceptor` request-scoped, dont la transaction ne doit pas couvrir un flux long) est exclu de la chaîne de connexion **par défaut** — le filtre ne retient que les intercepteurs exposant `interceptConnect`. À la connexion, `next()` résout un accept synthétique — il n'y a pas de handler en aval — donc court-circuitez pour refuser, ou appelez `next()` pour autoriser.
+
+Un intercepteur qui ne doit agir **qu'**à la connexion (rien sur les requêtes bufferisées) vit quand même dans la liste `interceptors` : donnez-lui donc une méthode de requête pass-through — `intercept(t, c, i, next) { return next(); }`. L'application à la connexion est un sous-ensemble d'`interceptors`, pas une liste indépendante.
 
 ## Ordre d'exécution
 

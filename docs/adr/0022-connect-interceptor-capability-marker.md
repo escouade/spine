@@ -138,6 +138,11 @@ framing); a boot-assert flagging any `requestScoped` interceptor that exposes `i
   second ordering surface to reason about.
 - **Negative / breaking**: `HttpGatewayModule.configure({ connectInterceptors })` is removed — a breaking change
   to http-gateway (0.x, zero known consumers; next release notes must call it out).
+- **Negative**: connect-only enforcement is no longer a first-class shape. The removed slot could hold an
+  interceptor **absent** from `interceptors` (act at connect but not at request, or use distinct connect-vs-request
+  instances); now the connect chain is a _subset_ of `interceptors`, so a connect-only interceptor needs a
+  pass-through `intercept(t, c, i, next) { return next(); }`. A real narrowing vs the slot — accepted: the case is
+  rare and the workaround is one line (documented in `gateway/interceptors.md`).
 - **Caution**: the marker proves intent to run at connect, not connect-safety; a request-scoped interceptor that
-  wrongly implements `interceptConnect` is still expressible. Closing that hole is the deferred `MetaValidator`
-  boot-assert.
+  wrongly implements `interceptConnect` is still expressible — including via **inheritance** (a subclass of a
+  connect-capable base is pulled in silently). Closing that hole is the deferred `MetaValidator` boot-assert.
