@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { streamSSE } from "hono/streaming";
-import type { Context as HonoCtx } from "hono";
+import type { Context as HonoCtx, MiddlewareHandler } from "hono";
 import type { SSEStreamingApi } from "hono/streaming";
 import {
   DispatchPipeline,
@@ -73,8 +73,19 @@ export class HttpGateway<
       code: Code
     ) => number = defaultStatusMapper as (code: Code) => number,
     /** Interval (ms) between SSE keep-alive comments on a stream; `0` disables. */
-    private readonly sseHeartbeatMs = 15_000
+    private readonly sseHeartbeatMs = 15_000,
+    /**
+     * App-level Hono middleware (helmet/compression/CORS…), outermost-first. Mounted here, in the
+     * constructor, **before** any route is bound — the gateway is constructed before feature modules'
+     * `onInit` call `register()`, and Hono only applies a middleware to routes registered *after* it.
+     * Wiring middleware in the constructor makes that ordering deterministic instead of racing route
+     * registration in `onStart`.
+     */
+    middleware: MiddlewareHandler[] = []
   ) {
+    // Mount app-level middleware first: the Hono `app` is still empty here (no route bound yet), so
+    // every route registered later sits inside these middleware, in array order (outermost-first).
+    for (const mw of middleware) this.app.use(mw);
     this.pipeline = new DispatchPipeline<Ctx, Code, HttpRoute<Ctx>>(
       this.validator,
       this.errorMapper,

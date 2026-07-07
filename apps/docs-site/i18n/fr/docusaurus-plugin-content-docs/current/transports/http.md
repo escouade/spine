@@ -145,25 +145,43 @@ Leur second rôle est le typage. L'augmentation unique du `HttpContextRegistry` 
 
 ## Envelopper chaque requête : middleware & CORS
 
-La gateway n'enveloppe **pas** CORS, logging, compression, en-têtes d'auth, etc. — c'est le rôle de Hono, et `app` est exposé précisément pour que vous montiez vous-même les [middlewares Hono](https://hono.dev/docs/middleware/builtin/cors). Aucune API spécifique à SpineJS à apprendre ; tout ce qui vient de `hono/*` fonctionne.
-
-Pour attacher un middleware, construisez vous-même le `HttpGateway` dans votre composition root et passez-le à `configure({ gateway })`. La gateway pré-construite porte déjà ses ports (context factory, error mapper, status mapper), vous ne les passez donc plus à `configure` :
+La gateway n'enveloppe **pas** CORS, logging, compression, en-têtes d'auth, etc. — c'est le rôle de Hono. Pour du middleware HTTP natif (`hono/*` ou le vôtre), passez un tableau `middleware` à `configure`. Il est monté sur l'app Hono **avant que la moindre route soit liée**, il enveloppe donc chaque route dans l'ordre du tableau (le premier = le plus externe) — aucun ordre à gérer vous-même :
 
 ```typescript
 // app.module.ts — la composition root
-import type { ModuleEntry } from "@spinejs/core";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import {
-  HttpGateway,
-  HttpGatewayModule,
-  ZodValidator,
-} from "@spinejs/http-gateway";
+import { compress } from "hono/compress";
+import { HttpGatewayModule } from "@spinejs/http-gateway";
 import { AppContextFactory } from "./app-context";
-import { AppErrorMapper, appStatusMapper } from "./app-error.mapper";
 import { UsersModule } from "./users.module";
 
-// La gateway possède désormais ses ports (c'étaient les adaptateurs de `configure` avant).
+export const modules = [
+  HttpGatewayModule.configure({
+    imports: [],
+    contextFactory: { value: new AppContextFactory() },
+    middleware: {
+      value: [
+        cors({ origin: "https://app.example.com" }),
+        logger(),
+        compress(),
+      ],
+    },
+  }),
+  UsersModule,
+];
+```
+
+Aucune API spécifique à SpineJS à apprendre ; une entrée `middleware` est un simple `MiddlewareHandler` Hono, et tout ce qui vient de `hono/*` fonctionne. Un middleware peut court-circuiter (retourner une `Response` avant `next()`) pour bloquer une requête — préflight CORS, garde d'auth — ou modifier la réponse après `next()`.
+
+### Middleware par préfixe de chemin
+
+L'option `middleware` monte globalement (`app.use(mw)`, tous les chemins). Pour restreindre un middleware à un préfixe (`app.use("/admin/*", mw)`), construisez vous-même le `HttpGateway` et montez sur son `app` brut avant de le passer à `configure({ gateway })` :
+
+```typescript
+import { HttpGateway, ZodValidator } from "@spinejs/http-gateway";
+import { AppErrorMapper, appStatusMapper } from "./app-error.mapper";
+
 const gateway = new HttpGateway(
   new ZodValidator(),
   new AppErrorMapper(),
@@ -171,18 +189,15 @@ const gateway = new HttpGateway(
   [],
   appStatusMapper
 );
+gateway.app.use("/admin/*", adminAuth()); // par préfixe — avant l'enregistrement
 
-// Montez le middleware sur l'app Hono brute AVANT l'enregistrement.
-gateway.app.use("*", cors({ origin: "https://app.example.com" }));
-gateway.app.use("*", logger());
-
-export const modules: ModuleEntry[] = [
+export const modules = [
   HttpGatewayModule.configure({ imports: [], gateway: { value: gateway } }),
   UsersModule,
 ];
 ```
 
-**L'ordre compte.** Hono associe middlewares et routes dans l'ordre d'enregistrement, le middleware doit donc être attaché **avant** les routes qu'il doit envelopper. Les routes sont montées durant l'`onInit` du feature-module (`register` → `app.on(...)`), c.-à-d. après la construction de la gateway — ajouter `app.use(...)` sur une gateway pré-construite (comme ci-dessus) est donc toujours assez tôt. Ajouter un middleware _après_ `app.init()` raterait les routes déjà enregistrées.
+**Pourquoi « avant l'enregistrement » est automatique.** Hono associe middlewares et routes dans l'ordre d'enregistrement, un middleware doit donc être attaché avant les routes qu'il enveloppe. L'option `middleware` monte dans le constructeur de la gateway, et le `app.use(...)` d'une gateway pré-construite tourne dans votre composition root — les deux se produisent avant que l'`onInit` des feature-modules ne lie les routes (`register` → `app.on(...)`). Ajouter un middleware _après_ `app.init()` raterait les routes déjà enregistrées.
 
 ## Personnaliser le pipeline
 
@@ -250,6 +265,7 @@ Sans `statusMapper`, un défaut intégré couvre les codes courants : `BAD_REQUE
 | `errorMapper`    | Non    | `DefaultHttpErrorMapper`                  | Mappe les erreurs lancées vers des codes stables.                                                                                                                                                  |
 | `validator`      | Non    | `ZodValidator`                            | Valide l'input structuré ; lance `ValidationError`.                                                                                                                                                |
 | `interceptors`   | Non    | `[]`                                      | Wrappers transverses autour de chaque dispatch — voir [Interceptors](../gateway/interceptors).                                                                                                     |
+| `middleware`     | Non    | `[]`                                      | Middleware Hono HTTP natif (helmet/compression/CORS), le plus externe d'abord. Monté avant que la moindre route soit liée. Gateway par défaut uniquement.                                          |
 | `statusMapper`   | Non    | Codes courants → statuts (voir ci-dessus) | Mappe un code d'erreur vers un statut HTTP.                                                                                                                                                        |
 | `port`           | Non    | `undefined` (pas d'écoute auto)           | Quand défini, `onStart()` appelle `gateway.listen(port)`.                                                                                                                                          |
 | `gateway`        | Non    | construite depuis les adaptateurs         | Une `HttpGateway` pré-construite (ou factory). Remplace le défaut ; permet à un test de tenir l'instance et de piloter `gateway.app.request()`. Quand fournie, `contextFactory` n'est pas requise. |
@@ -302,6 +318,8 @@ new HttpGateway(
   contextFactory: ContextFactory<HttpRaw, Ctx>,
   interceptors?: GatewayInterceptor<Ctx, Code>[],
   statusMapper?: (code: Code) => number,
+  sseHeartbeatMs?: number,          // défaut 15_000
+  middleware?: MiddlewareHandler[], // middleware Hono, monté avant que la moindre route soit liée
 )
 ```
 

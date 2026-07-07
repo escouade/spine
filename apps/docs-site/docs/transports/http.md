@@ -145,25 +145,43 @@ Their second job is typing. The one-time `HttpContextRegistry` augmentation sets
 
 ## Wrapping every request: middleware & CORS
 
-The gateway does **not** wrap CORS, logging, compression, auth headers, etc. — that is Hono's job, and `app` is exposed exactly so you mount [Hono middleware](https://hono.dev/docs/middleware/builtin/cors) yourself. There is no SpineJS-specific API to learn; anything from `hono/*` works.
-
-To attach middleware, build the `HttpGateway` yourself in your composition root and hand it to `configure({ gateway })`. The pre-built gateway already carries its ports (context factory, error mapper, status mapper), so you no longer pass them to `configure`:
+The gateway does **not** wrap CORS, logging, compression, auth headers, etc. — that is Hono's job. For HTTP-native middleware (`hono/*` or anything you write), pass a `middleware` array to `configure`. It is mounted on the Hono app **before any route is bound**, so it wraps every route in array order (outermost-first) — no ordering to get right yourself:
 
 ```typescript
 // app.module.ts — the composition root
-import type { ModuleEntry } from "@spinejs/core";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import {
-  HttpGateway,
-  HttpGatewayModule,
-  ZodValidator,
-} from "@spinejs/http-gateway";
+import { compress } from "hono/compress";
+import { HttpGatewayModule } from "@spinejs/http-gateway";
 import { AppContextFactory } from "./app-context";
-import { AppErrorMapper, appStatusMapper } from "./app-error.mapper";
 import { UsersModule } from "./users.module";
 
-// The gateway now owns its ports (they were the `configure` adapters before).
+export const modules = [
+  HttpGatewayModule.configure({
+    imports: [],
+    contextFactory: { value: new AppContextFactory() },
+    middleware: {
+      value: [
+        cors({ origin: "https://app.example.com" }),
+        logger(),
+        compress(),
+      ],
+    },
+  }),
+  UsersModule,
+];
+```
+
+There is no SpineJS-specific API to learn; a `middleware` entry is a plain Hono `MiddlewareHandler`, and anything from `hono/*` works. A middleware can short-circuit (return a `Response` before `next()`) to block a request — CORS preflight, an auth gate — or mutate the response after `next()`.
+
+### Path-scoped middleware
+
+The `middleware` option mounts globally (`app.use(mw)`, all paths). To scope a middleware to a path prefix (`app.use("/admin/*", mw)`), build the `HttpGateway` yourself and mount on its raw `app` before handing it to `configure({ gateway })`:
+
+```typescript
+import { HttpGateway, ZodValidator } from "@spinejs/http-gateway";
+import { AppErrorMapper, appStatusMapper } from "./app-error.mapper";
+
 const gateway = new HttpGateway(
   new ZodValidator(),
   new AppErrorMapper(),
@@ -171,18 +189,15 @@ const gateway = new HttpGateway(
   [],
   appStatusMapper
 );
+gateway.app.use("/admin/*", adminAuth()); // path-scoped — before registration
 
-// Mount middleware on the raw Hono app BEFORE registration.
-gateway.app.use("*", cors({ origin: "https://app.example.com" }));
-gateway.app.use("*", logger());
-
-export const modules: ModuleEntry[] = [
+export const modules = [
   HttpGatewayModule.configure({ imports: [], gateway: { value: gateway } }),
   UsersModule,
 ];
 ```
 
-**Order matters.** Hono matches middleware and routes in registration order, so middleware must be attached **before** the routes it should wrap. Routes are mounted during the feature module's `onInit` (`register` → `app.on(...)`), i.e. after the gateway is built — so adding `app.use(...)` on a pre-built gateway (as above) is always early enough. Adding middleware _after_ `app.init()` would miss the already-registered routes.
+**Why "before registration" is automatic.** Hono matches middleware and routes in registration order, so a middleware must be attached before the routes it wraps. The `middleware` option mounts in the gateway constructor, and a pre-built gateway's `app.use(...)` runs in your composition root — both happen before feature modules' `onInit` bind routes (`register` → `app.on(...)`). Adding middleware _after_ `app.init()` would miss the already-registered routes.
 
 ## Customising the pipeline
 
@@ -250,6 +265,7 @@ When no `statusMapper` is given, a built-in default covers the common codes: `BA
 | `errorMapper`    | No       | `DefaultHttpErrorMapper`            | Maps thrown errors to stable codes.                                                                                                                                          |
 | `validator`      | No       | `ZodValidator`                      | Validates the structured input; throws `ValidationError`.                                                                                                                    |
 | `interceptors`   | No       | `[]`                                | Cross-cutting wrappers around every dispatch — see [Interceptors](../gateway/interceptors).                                                                                  |
+| `middleware`     | No       | `[]`                                | HTTP-native Hono middleware (helmet/compression/CORS), outermost-first. Mounted before any route binds. Default gateway only.                                                |
 | `statusMapper`   | No       | Common codes → statuses (see above) | Maps an error code to an HTTP status.                                                                                                                                        |
 | `port`           | No       | `undefined` (no auto-listen)        | When set, `onStart()` calls `gateway.listen(port)`.                                                                                                                          |
 | `gateway`        | No       | built from the adapters             | A pre-built `HttpGateway` (or factory). Replaces the default; lets a test hold the instance and drive `gateway.app.request()`. When given, `contextFactory` is not required. |
@@ -302,6 +318,8 @@ new HttpGateway(
   contextFactory: ContextFactory<HttpRaw, Ctx>,
   interceptors?: GatewayInterceptor<Ctx, Code>[],
   statusMapper?: (code: Code) => number,
+  sseHeartbeatMs?: number,          // default 15_000
+  middleware?: MiddlewareHandler[], // Hono middleware, mounted before any route binds
 )
 ```
 
