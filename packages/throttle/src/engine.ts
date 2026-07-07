@@ -382,7 +382,10 @@ export function validateRouteThrottleMeta(
   assertRouteMetaShape(raw, routeId);
 
   for (const name of raw.skip ?? []) {
-    if (!(name in policies)) {
+    // Own-property check, not `in`: a builtin like `skip: ["constructor"]`/`"__proto__"` lives on the
+    // prototype chain, so `in` would treat it as a configured default and silently no-op the skip
+    // (review #40) — `hasOwnProperty` preserves the fail-loud semantics.
+    if (!Object.prototype.hasOwnProperty.call(policies, name)) {
       throw new ThrottleConfigError(
         name,
         "`skip` names a policy that is not a configured gateway default — the route would " +
@@ -391,7 +394,11 @@ export function validateRouteThrottleMeta(
     }
   }
   for (const [name, override] of Object.entries(raw.override ?? {})) {
-    const base = policies[name];
+    // Own-property lookup (see the `skip` note): `policies["__proto__"]` would otherwise resolve to
+    // `Object.prototype` (truthy) and pass the "is a configured default" check (review #40).
+    const base = Object.prototype.hasOwnProperty.call(policies, name)
+      ? policies[name]
+      : undefined;
     if (!base) {
       throw new ThrottleConfigError(
         name,
@@ -446,6 +453,7 @@ function readThrottleRouteMeta(
  */
 function assertRouteMetaShape(raw: ThrottleRouteMeta, routeId: string): void {
   const meta = raw as {
+    routeId?: unknown;
     policies?: unknown;
     skip?: unknown;
     override?: unknown;
@@ -455,6 +463,20 @@ function assertRouteMetaShape(raw: ThrottleRouteMeta, routeId: string): void {
     throw new ThrottleConfigError(routeId, rule);
   };
 
+  // A non-string (or empty) `routeId` on a hand-built meta is not cosmetic: `parseSpec` treats only
+  // `routeId === undefined` as unstamped, so a `null`/`{}`/`""` id slips past the unstamped fail-loud
+  // guard and routes every such target into ONE shared `"route"` bucket — a cross-route shared-quota
+  // footgun. Reject it here (review #40).
+  if (
+    meta.routeId !== undefined &&
+    (typeof meta.routeId !== "string" || meta.routeId === "")
+  ) {
+    fail(
+      `\`throttle.routeId\` must be a non-empty string (got ${describeType(
+        meta.routeId
+      )})`
+    );
+  }
   if (meta.disabled !== undefined && typeof meta.disabled !== "boolean") {
     fail(
       `\`throttle.disabled\` must be a boolean (got ${describeType(
@@ -462,12 +484,26 @@ function assertRouteMetaShape(raw: ThrottleRouteMeta, routeId: string): void {
       )})`
     );
   }
-  if (meta.policies !== undefined && !Array.isArray(meta.policies)) {
-    fail(
-      `\`throttle.policies\` must be an array of policies (got ${describeType(
-        meta.policies
-      )})`
-    );
+  // `policies` must be an array AND every entry a plain object — a `null`/`undefined` entry would
+  // otherwise crash `validatePolicy`'s `policy.limit` read with a raw native `TypeError`, the very
+  // symptom this guard exists to prevent (review #40; `override` entries are checked likewise below).
+  if (meta.policies !== undefined) {
+    if (!Array.isArray(meta.policies)) {
+      fail(
+        `\`throttle.policies\` must be an array of policies (got ${describeType(
+          meta.policies
+        )})`
+      );
+    }
+    (meta.policies as unknown[]).forEach((policy, index) => {
+      if (!isPlainObject(policy)) {
+        fail(
+          `\`throttle.policies[${index}]\` must be a policy object (got ${describeType(
+            policy
+          )})`
+        );
+      }
+    });
   }
   if (meta.skip !== undefined) {
     if (!Array.isArray(meta.skip)) {
@@ -480,7 +516,7 @@ function assertRouteMetaShape(raw: ThrottleRouteMeta, routeId: string): void {
     for (const name of meta.skip as unknown[]) {
       if (typeof name !== "string") {
         fail(
-          `\`throttle.skip\` must contain only policy-name strings (got a ${describeType(
+          `\`throttle.skip\` must contain only policy-name strings (got ${describeType(
             name
           )})`
         );

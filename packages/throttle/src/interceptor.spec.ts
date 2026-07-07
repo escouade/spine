@@ -658,3 +658,18 @@ describe("route spec semantics (AD-3 groundwork for Story 1.8)", () => {
     expect(idOf("GET /b")).toBe("global");
   });
 });
+
+describe("malformed hand-built inline meta at request time (review #40)", () => {
+  it("rejects a null `policies` entry with ThrottleConfigError, not a raw TypeError", async () => {
+    const interceptor = makeInterceptor({});
+    const malformed = {
+      guards: [],
+      invoke: () => "handled",
+      meta: { throttle: { routeId: "GET /r", policies: [null] } },
+    } as unknown as LoadedRoute<Ctx>;
+    // Proves the REQUEST path (dispatch → intercept → evaluate → parseSpec → validate) fails loud —
+    // the boot walk is not the only guard site, and both share `validateRouteThrottleMeta` (review #40).
+    const { error } = await dispatchCapturingError(interceptor, malformed);
+    expect(error).toBeInstanceOf(ThrottleConfigError);
+  });
+});
