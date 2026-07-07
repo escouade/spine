@@ -79,7 +79,9 @@ class ThrottleInterceptor implements GatewayInterceptor, ConnectInterceptor {
 }
 ```
 
-The HTTP gateway derives its connect chain from the **same** `interceptors` list, filtered to those implementing `interceptConnect` — so you wire the interceptor **once**. An interceptor that does **not** implement `ConnectInterceptor` (a request-scoped `MikroOrmInterceptor`, whose transaction must not span a long-lived stream) is never run at connect, by construction. At connect, `next()` resolves to a synthetic accept — there is no downstream handler — so short-circuit to deny, or call `next()` to allow.
+The HTTP gateway derives its connect chain from the **same** `interceptors` list, filtered to those implementing `interceptConnect` — so you wire the interceptor **once**. An interceptor that does **not** implement `ConnectInterceptor` (a request-scoped `MikroOrmInterceptor`, whose transaction must not span a long-lived stream) is excluded from the connect chain **by default** — the filter only picks up interceptors that expose `interceptConnect`. At connect, `next()` resolves to a synthetic accept — there is no downstream handler — so short-circuit to deny, or call `next()` to allow.
+
+An interceptor that should act **only** at connect (nothing on buffered requests) still lives in the `interceptors` list, so give it a pass-through request method: `intercept(t, c, i, next) { return next(); }`. Connect-phase enforcement is a subset of `interceptors`, not an independent list.
 
 ## Execution order
 

@@ -107,7 +107,7 @@ Pass a pre-built gateway via `configure({ gateway })` and drive Hono's `app.requ
 
 ## Server-Sent Events
 
-`sse()` declares a streaming `GET` (a peer of `get`/`post`) whose callback returns an `AsyncIterable<SseEvent>`; `SseHub` fans one event out to every open connection for a key. An SSE route reuses the route's guards + input validation but bypasses the envelope, the interceptor chain, and the per-request CLS scope (a long-lived stream must not hold scoped resources).
+`sse()` declares a streaming `GET` (a peer of `get`/`post`) whose callback returns an `AsyncIterable<SseEvent>`; `SseHub` fans one event out to every open connection for a key. An SSE route reuses the route's guards + input validation but bypasses the envelope, the buffered interceptor pipeline, and the per-request CLS scope (a long-lived stream must not hold scoped resources) — except that an interceptor implementing `ConnectInterceptor` (e.g. the throttle interceptor) is run once at the connection **attempt**, before guards, so connects can be enforced without wrapping the stream.
 
 ```typescript
 import { sse, SseHub } from "@spinejs/http-gateway";

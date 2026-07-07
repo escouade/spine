@@ -1,6 +1,6 @@
 # ADR 0017 — Server-Sent Events fan-out in `@spinejs/http-gateway`
 
-- **Status**: Accepted
+- **Status**: Accepted — **amended** by [ADR 0022](0022-connect-interceptor-capability-marker.md) (§3)
 - **Date**: 2026-07-04
 - **Scope**: `packages/http-gateway` only (`http-routes.ts`, `http.gateway.ts`, `http-gateway.module.ts`,
   new `sse-hub.ts`). `packages/gateway-core` is **untouched**.
@@ -10,6 +10,14 @@
   [ADR 0003](0003-cls-request-context.md) (see §2). First of two "server batteries" built cold per
   studio ADR 0017 §3; the second is [ADR 0018](0018-cls-scoped-scheduling.md). ORM (spine ADR 0016) is
   the third.
+
+:::note Amended by ADR 0022 (§3)
+§3 below states the SSE path skips the interceptor chain entirely. As of [ADR 0022](0022-connect-interceptor-capability-marker.md),
+a **connect-phase subset** of `interceptors` — those implementing `ConnectInterceptor` — runs at the
+connection **attempt** (before guards), via `interceptConnect`. The streaming **body** still bypasses the
+buffered pipeline and CLS scope exactly as described here; only the one-shot connect is enforced. Read "the
+interceptor chain does not run" below as "the buffered request pipeline does not wrap the stream".
+:::
 
 ## Context
 
