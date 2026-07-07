@@ -660,16 +660,40 @@ describe("route spec semantics (AD-3 groundwork for Story 1.8)", () => {
 });
 
 describe("malformed hand-built inline meta at request time (review #40)", () => {
-  it("rejects a null `policies` entry with ThrottleConfigError, not a raw TypeError", async () => {
-    const interceptor = makeInterceptor({});
-    const malformed = {
+  const malformedTarget = (throttle: unknown): LoadedRoute<Ctx> =>
+    ({
       guards: [],
       invoke: () => "handled",
-      meta: { throttle: { routeId: "GET /r", policies: [null] } },
-    } as unknown as LoadedRoute<Ctx>;
+      meta: { throttle },
+    } as unknown as LoadedRoute<Ctx>);
+
+  it("rejects a null `policies` entry with ThrottleConfigError, not a raw TypeError", async () => {
+    const interceptor = makeInterceptor({});
     // Proves the REQUEST path (dispatch → intercept → evaluate → parseSpec → validate) fails loud —
     // the boot walk is not the only guard site, and both share `validateRouteThrottleMeta` (review #40).
-    const { error } = await dispatchCapturingError(interceptor, malformed);
+    const { envelope, error } = await dispatchCapturingError(
+      interceptor,
+      malformedTarget({ routeId: "GET /r", policies: [null] })
+    );
     expect(error).toBeInstanceOf(ThrottleConfigError);
+    expect((error as Error).message).toMatch(
+      /GET \/r.*policies\[0\].*policy object.*got null/s
+    );
+    expect(envelope).toEqual({ ok: false, code: "INTERNAL" });
+  });
+
+  it("rejects a null `routeId` with ThrottleConfigError on the request path too", async () => {
+    const interceptor = makeInterceptor({});
+    const { error } = await dispatchCapturingError(
+      interceptor,
+      malformedTarget({
+        routeId: null,
+        policies: [{ limit: 1, windowMs: 1000, keyBy: () => "k" }],
+      })
+    );
+    expect(error).toBeInstanceOf(ThrottleConfigError);
+    expect((error as Error).message).toMatch(
+      /throttle\.routeId.*non-empty string.*got null/s
+    );
   });
 });

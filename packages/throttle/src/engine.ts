@@ -204,7 +204,13 @@ export class ThrottleEngine {
   ): Iterable<ApplicablePolicy> {
     for (const [name, policy] of Object.entries(this.config.policies)) {
       if (spec.skip.has(name)) continue;
-      const override = spec.override[name];
+      // Own-property lookup, symmetric with the boot-walk `override` check: a default named like an
+      // `Object.prototype` member (e.g. `toString`) would otherwise inherit a truthy value from the
+      // prototype chain and be silently treated as overridden — detaching the route from the shared
+      // gateway quota (review #40, enforcement half of the same proto-chain class).
+      const override = Object.prototype.hasOwnProperty.call(spec.override, name)
+        ? spec.override[name]
+        : undefined;
       // An overridden default is enforced route-scoped with the merged values, in its OWN store
       // space (`name@routeId`): a per-route `maxKeys` override must not resize — and evict counters
       // in — the shared default's space used by other routes / the gateway scope (AD-5 isolation).
@@ -469,7 +475,7 @@ function assertRouteMetaShape(raw: ThrottleRouteMeta, routeId: string): void {
   // footgun. Reject it here (review #40).
   if (
     meta.routeId !== undefined &&
-    (typeof meta.routeId !== "string" || meta.routeId === "")
+    (typeof meta.routeId !== "string" || meta.routeId.trim() === "")
   ) {
     fail(
       `\`throttle.routeId\` must be a non-empty string (got ${describeType(
