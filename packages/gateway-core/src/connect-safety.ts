@@ -51,9 +51,12 @@ export function assertConnectInterceptorsSafe(
       isConnectInterceptor(interceptor as GatewayInterceptor) &&
       (interceptor as Partial<RequestScoped>).requestScoped === true
     ) {
+      const ctorName = (interceptor as { constructor?: { name?: string } })
+        .constructor?.name;
+      // A plain object literal reports `constructor.name === "Object"` — no more identifying than none,
+      // so fall back to the generic phrasing there too (a real interceptor is a named class instance).
       const name =
-        (interceptor as { constructor?: { name?: string } }).constructor
-          ?.name || "an interceptor";
+        !ctorName || ctorName === "Object" ? "an interceptor" : ctorName;
       throw new Error(
         `@spinejs/gateway-core: ${name} is marked \`requestScoped\` but also implements ` +
           `ConnectInterceptor (interceptConnect), so it would run at a transport's connection phase ` +
