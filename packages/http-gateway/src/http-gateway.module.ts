@@ -171,6 +171,16 @@ export class HttpGatewayModule implements OnStart, OnStop {
         "HttpGatewayModule.configure requires either `gateway` (a pre-built HttpGateway) or `contextFactory` (to build the default one)."
       );
     }
+    // `middleware` only reaches the DEFAULT gateway (it's a ctor arg of the factory below). A pre-built
+    // `gateway` upserts the HttpGateway token, so that factory never runs and the middleware would be
+    // silently dropped. Fail loudly instead of no-op'ing a documented option (mirrors the XOR above).
+    if (options.gateway && options.middleware) {
+      throw new Error(
+        "HttpGatewayModule.configure: `middleware` is ignored when a pre-built `gateway` is provided " +
+          "(the gateway owns its Hono setup). Mount middleware on the gateway's `app` yourself before " +
+          "registration, or drop `gateway` to use the default one with `middleware`."
+      );
+    }
     return {
       module: HttpGatewayModule,
       imports: options.imports,

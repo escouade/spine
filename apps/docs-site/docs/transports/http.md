@@ -174,12 +174,17 @@ export const modules = [
 
 There is no SpineJS-specific API to learn; a `middleware` entry is a plain Hono `MiddlewareHandler`, and anything from `hono/*` works. A middleware can short-circuit (return a `Response` before `next()`) to block a request — CORS preflight, an auth gate — or mutate the response after `next()`.
 
+:::warning
+`middleware` mounts **globally** (all paths), so it also wraps SSE (`sse()`) routes. A response-buffering middleware — notably `compress()` — will buffer and break a stream. Keep buffering middleware off SSE endpoints by scoping it to a path prefix via the pre-built `gateway` below, not the global `middleware` option.
+:::
+
 ### Path-scoped middleware
 
 The `middleware` option mounts globally (`app.use(mw)`, all paths). To scope a middleware to a path prefix (`app.use("/admin/*", mw)`), build the `HttpGateway` yourself and mount on its raw `app` before handing it to `configure({ gateway })`:
 
 ```typescript
 import { HttpGateway, ZodValidator } from "@spinejs/http-gateway";
+import { basicAuth } from "hono/basic-auth";
 import { AppErrorMapper, appStatusMapper } from "./app-error.mapper";
 
 const gateway = new HttpGateway(
@@ -189,7 +194,11 @@ const gateway = new HttpGateway(
   [],
   appStatusMapper
 );
-gateway.app.use("/admin/*", adminAuth()); // path-scoped — before registration
+// Path-scoped — mounted before registration. `configure({ middleware })` cannot narrow by path.
+gateway.app.use(
+  "/admin/*",
+  basicAuth({ username: "admin", password: ADMIN_PW })
+);
 
 export const modules = [
   HttpGatewayModule.configure({ imports: [], gateway: { value: gateway } }),

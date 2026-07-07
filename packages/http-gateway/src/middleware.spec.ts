@@ -4,9 +4,14 @@
 // gateway directly (middleware is the last ctor arg) and drive `gateway.app.request()`.
 import { describe, expect, it } from "vitest";
 import type { MiddlewareHandler } from "hono";
+import { App, Module } from "@spinejs/core";
+import type { Logger } from "@spinejs/core";
+import { Controller } from "@spinejs/gateway-core";
 import { HttpGateway } from "./http.gateway";
 import type { HttpRoute } from "./http.gateway";
 import { HttpGatewayModule } from "./http-gateway.module";
+import { httpFeature } from "./http-module";
+import { get } from "./http-routes";
 import { ZodValidator } from "./zod.validator";
 import { DefaultHttpErrorMapper } from "./default-error.mapper";
 import type { HttpBaseContext, HttpMethod, HttpRaw } from "./http-base.types";
@@ -14,6 +19,21 @@ import type { HttpBaseContext, HttpMethod, HttpRaw } from "./http-base.types";
 const contextFactory = {
   create: (c: HttpRaw): HttpBaseContext => ({ honoCtx: c }),
 };
+
+const silentLogger = {
+  info() {},
+  error() {},
+  warn() {},
+  debug() {},
+  verbose() {},
+  fatal() {},
+  exit: async () => {},
+} as unknown as Logger;
+
+@Controller({})
+class ProbeController {
+  ping = get("/probe", {}, () => "ok");
+}
 
 const route = (method: HttpMethod, path: string): HttpRoute => ({
   address: { method, path },
@@ -124,5 +144,61 @@ describe("HttpGateway app-level middleware", () => {
         contextFactory: { value: contextFactory },
       })
     ).not.toThrow();
+  });
+
+  it("throws when both `gateway` and `middleware` are configured (middleware would be dropped)", () => {
+    // A pre-built gateway owns its Hono setup, so the default-gateway factory (which reads the
+    // middleware slot) never runs — configuring both would silently drop the middleware. Fail loudly.
+    const passThrough: MiddlewareHandler = async (_c, next) => {
+      await next();
+    };
+    expect(() =>
+      HttpGatewayModule.configure({
+        imports: [],
+        gateway: { value: build([]) },
+        middleware: { value: [passThrough] },
+      })
+    ).toThrow(/`middleware` is ignored when a pre-built `gateway`/);
+  });
+
+  it("wires the `middleware` option through DI to the default gateway (real App boot)", async () => {
+    // The ctor-level tests above prove behavior; this proves the SEAM — configure({ middleware }) →
+    // middlewareToken provider → factory inject/param → new HttpGateway(...). Deleting the
+    // `toProvider(middlewareToken, …)` wiring would fall back to the empty default and this test would
+    // fail (the probe never runs), where the ctor tests + typecheck alone cannot catch it.
+    const calls: string[] = [];
+    const probe: MiddlewareHandler = async (_c, next) => {
+      calls.push("probe");
+      await next();
+    };
+    let resolved: HttpGateway | undefined;
+
+    @Module({
+      inject: [HttpGateway] as const,
+      imports: [
+        HttpGatewayModule.configure({
+          imports: [],
+          contextFactory: { value: contextFactory },
+          middleware: { value: [probe] },
+        }),
+        httpFeature({ controllers: [ProbeController] }),
+      ],
+    })
+    class TestAppModule {
+      constructor(gw: HttpGateway) {
+        resolved = gw;
+      }
+    }
+
+    const app = new App([TestAppModule], {
+      logger: silentLogger,
+      handleProcessExit: false, // don't install process-level handlers in a unit test
+    });
+    await app.init();
+    if (!resolved) throw new Error("HttpGateway was not resolved");
+
+    const res = await resolved.app.request("/probe");
+    expect(res.status).toBe(200);
+    expect(calls).toEqual(["probe"]); // the configured middleware actually ran → seam proven
   });
 });

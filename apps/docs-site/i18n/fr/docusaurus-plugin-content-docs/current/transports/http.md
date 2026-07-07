@@ -174,12 +174,17 @@ export const modules = [
 
 Aucune API spécifique à SpineJS à apprendre ; une entrée `middleware` est un simple `MiddlewareHandler` Hono, et tout ce qui vient de `hono/*` fonctionne. Un middleware peut court-circuiter (retourner une `Response` avant `next()`) pour bloquer une requête — préflight CORS, garde d'auth — ou modifier la réponse après `next()`.
 
+:::warning
+`middleware` monte **globalement** (tous les chemins), il enveloppe donc aussi les routes SSE (`sse()`). Un middleware qui bufferise la réponse — typiquement `compress()` — bufferisera et cassera un flux. Gardez les middlewares bufferisants hors des endpoints SSE en les restreignant à un préfixe via la gateway pré-construite ci-dessous, pas via l'option globale `middleware`.
+:::
+
 ### Middleware par préfixe de chemin
 
 L'option `middleware` monte globalement (`app.use(mw)`, tous les chemins). Pour restreindre un middleware à un préfixe (`app.use("/admin/*", mw)`), construisez vous-même le `HttpGateway` et montez sur son `app` brut avant de le passer à `configure({ gateway })` :
 
 ```typescript
 import { HttpGateway, ZodValidator } from "@spinejs/http-gateway";
+import { basicAuth } from "hono/basic-auth";
 import { AppErrorMapper, appStatusMapper } from "./app-error.mapper";
 
 const gateway = new HttpGateway(
@@ -189,7 +194,11 @@ const gateway = new HttpGateway(
   [],
   appStatusMapper
 );
-gateway.app.use("/admin/*", adminAuth()); // par préfixe — avant l'enregistrement
+// Par préfixe — monté avant l'enregistrement. `configure({ middleware })` ne peut pas filtrer par chemin.
+gateway.app.use(
+  "/admin/*",
+  basicAuth({ username: "admin", password: ADMIN_PW })
+);
 
 export const modules = [
   HttpGatewayModule.configure({ imports: [], gateway: { value: gateway } }),
