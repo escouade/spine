@@ -246,6 +246,23 @@ describe("boot walk hardens malformed route-inline `meta.throttle` sub-fields (r
     );
   });
 
+  it("rejects `override: { constructor: … }` — a prototype-chain name is not a configured default (review #40)", () => {
+    const mod = moduleWalking(
+      metaSnapshot({
+        routeId: "POST /proto-override",
+        override: {
+          constructor: { limit: 5, windowMs: 1000, keyBy: () => "k" },
+        },
+      })
+    );
+    // Symmetric with the `skip` proto case: `policies["constructor"]` resolves to
+    // `Object.prototype.constructor` under `in`, so the own-property check keeps it fail-loud.
+    expect(() => mod.onStart()).toThrow(ThrottleConfigError);
+    expect(() => mod.onStart()).toThrow(
+      /constructor.*not a configured gateway default/s
+    );
+  });
+
   it("leaves a well-formed inline spec untouched (no false positive)", () => {
     const mod = moduleWalking(
       metaSnapshot({
