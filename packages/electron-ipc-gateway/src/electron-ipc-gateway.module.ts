@@ -5,12 +5,14 @@ import {
   loggerToken,
   Module,
   ModuleEntry,
+  OnStart,
 } from "@spinejs/core";
-import { toProvider } from "@spinejs/gateway-core";
+import { toProvider, validateRouteMeta } from "@spinejs/gateway-core";
 import type {
   ContextFactory,
   ErrorMapper,
   ChainInterceptor,
+  MetaValidator,
   ProviderAdapter,
   Validator,
 } from "@spinejs/gateway-core";
@@ -35,6 +37,9 @@ const contextFactoryToken = new InjectionToken<
 const interceptorsToken = new InjectionToken<
   ChainInterceptor<ElectronIpcBaseContext, string, IpcRoute>[]
 >("electron-ipc-gateway.interceptors");
+const metaValidatorsToken = new InjectionToken<MetaValidator[]>(
+  "electron-ipc-gateway.meta-validators"
+);
 
 /**
  * Gateway transport module for the Electron IPC binding. The base `@Module` registers the
@@ -46,8 +51,10 @@ const interceptorsToken = new InjectionToken<
  * usages (which import the bare class) will see the merged providers.
  */
 @Module({
+  inject: [ElectronIpcGateway, metaValidatorsToken] as const,
   providers: [
     { provide: interceptorsToken, value: [] },
+    { provide: metaValidatorsToken, value: [] },
     {
       provide: ElectronIpcGateway,
       inject: [
@@ -79,7 +86,26 @@ const interceptorsToken = new InjectionToken<
   ],
   exports: [ElectronIpcGateway],
 })
-export class ElectronIpcGatewayModule {
+export class ElectronIpcGatewayModule implements OnStart {
+  constructor(
+    private readonly gateway: ElectronIpcGateway,
+    private readonly metaValidators: MetaValidator[]
+  ) {}
+
+  /**
+   * Once every module is initialized (so all feature modules have registered their channels), crosses
+   * this gateway's own channels × its own `metaValidators` — a bad route-inline `meta` slice (e.g. a
+   * throttle spec with `'ip'` on IPC) fails boot with the channel named. IPC has no `listen()`, so the
+   * walk is the whole start hook; the channel string IS the routeId. Zero validators wired → no walk.
+   */
+  onStart(): void {
+    validateRouteMeta(
+      this.gateway.routes,
+      this.metaValidators,
+      (channel) => channel // IPC address IS the channel string = routeId
+    );
+  }
+
   /**
    * Supplies the three gateway ports (context factory, error mapper, validator) so
    * `ElectronIpcGateway` can be instantiated. `imports` should include any module that
@@ -95,6 +121,12 @@ export class ElectronIpcGatewayModule {
     interceptors?: ProviderAdapter<
       ChainInterceptor<ElectronIpcBaseContext, string, IpcRoute>[]
     >;
+    /**
+     * Boot-time, per-channel `meta` validators (a separate concept from `interceptors`). At start,
+     * this gateway crosses its own channels × these validators and fails boot on a bad route-inline
+     * `meta` slice (a battery ships one, e.g. `throttleMetaValidatorRef()`). Default `[]` → no walk.
+     */
+    metaValidators?: ProviderAdapter<MetaValidator[]>;
   }): DynamicModule {
     return {
       module: ElectronIpcGatewayModule,
@@ -110,6 +142,10 @@ export class ElectronIpcGatewayModule {
           options.validator ?? { factory: () => new ZodValidator() }
         ),
         toProvider(interceptorsToken, options.interceptors ?? { value: [] }),
+        toProvider(
+          metaValidatorsToken,
+          options.metaValidators ?? { value: [] }
+        ),
       ],
     };
   }

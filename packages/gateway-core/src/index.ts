@@ -24,9 +24,11 @@ export type {
   ContextFactory,
   ErrorMapper,
   GatewayInterceptor,
+  MetaValidator,
   SchemaConverter,
   Validator,
 } from "./ports";
+export { validateRouteMeta } from "./meta-validator";
 export {
   gatewayFeatureFactory,
   gatewayModuleDecorator,

@@ -60,6 +60,17 @@ export function validatePolicy(
       "`scope: 'gateway'` is declarable only in `ThrottleModule.configure`, never route-inline (AD-3)"
     );
   }
+  // `keyBy` selects the key: a wired source NAME (string) or a `(ctx, rawInput) => string | null`
+  // selector. Anything else (a number, an object, `undefined` from a hand-built route meta) can neither
+  // be looked up nor called — the engine would fail CLOSED silently at the first dispatch. Reject it at
+  // boot, naming the policy (review #40, the keyBy half of the fail-silent class).
+  if (typeof policy.keyBy !== "string" && typeof policy.keyBy !== "function") {
+    const kind = policy.keyBy === null ? "null" : typeof policy.keyBy;
+    fail(
+      "`keyBy` must be a wired key-source name (string) or a selector function " +
+        `(got ${kind})`
+    );
+  }
   if (
     typeof policy.keyBy === "string" &&
     !context.keySources.includes(policy.keyBy)

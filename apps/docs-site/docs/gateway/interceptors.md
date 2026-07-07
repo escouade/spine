@@ -83,6 +83,38 @@ The HTTP gateway derives its connect chain from the **same** `interceptors` list
 
 An interceptor that should act **only** at connect (nothing on buffered requests) still lives in the `interceptors` list, so give it a pass-through request method: `intercept(t, c, i, next) { return next(); }`. Connect-phase enforcement is a subset of `interceptors`, not an independent list.
 
+## Validate route meta at boot
+
+Interceptors run at **request time**. A separate, complementary primitive — `MetaValidator` — runs at **boot time**: it validates a battery's namespaced slice of each route's `meta` (e.g. `meta.throttle`) so a typo fails startup, not the first dispatch. It is a **different** concept from an interceptor (different type, different slot, different lifecycle) — do not conflate the two.
+
+Wire validators through the same `configure()` adapter pattern, in the `metaValidators` slot. A battery ships a validator token you drop in next to its interceptor, on the **same** gateway:
+
+```typescript
+HttpGatewayModule.configure({
+  imports: [ThrottleModule.configure({ policies: {} })],
+  contextFactory: {
+    /* ... */
+  },
+  interceptors: { inject: [throttleInterceptorRef()], factory: (i) => [i] }, // runtime
+  metaValidators: { inject: [throttleMetaValidatorRef()], factory: (v) => [v] }, // boot-time
+});
+```
+
+At start, the gateway crosses **its own** routes against **its own** validators — for every route whose `meta` carries a validator's `namespace`, it calls `validate(routeId, meta[namespace])`; a throw fails boot with the route named, before the transport opens (HTTP: before `listen()`). Zero validators wired → no walk (backward-compatible). Because the gateway owns both halves, the validated routes are exactly the routes that gateway enforces — a validator can never be wired to the wrong gateway.
+
+A validator implements one boot-time method:
+
+```typescript
+import type { MetaValidator } from "@spinejs/gateway-core";
+
+class ThrottleMetaValidator implements MetaValidator {
+  readonly namespace = "throttle"; // only routes carrying `meta.throttle` are validated
+  validate(routeId: string, meta: unknown): void {
+    /* throw a typed config error (route named) on an invalid spec */
+  }
+}
+```
+
 ## Execution order
 
 Interceptors are chained in registration order. The first interceptor in the array is the outermost wrapper — it runs first on the way in and last on the way out:

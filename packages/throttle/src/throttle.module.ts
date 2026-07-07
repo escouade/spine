@@ -1,11 +1,10 @@
 import { InjectionToken, Module } from "@spinejs/core";
-import type { DynamicModule, OnInit, OnStart, OnStop } from "@spinejs/core";
-import type { GatewayContext, ProviderAdapter } from "@spinejs/gateway-core";
-import { toProvider } from "@spinejs/gateway-core";
+import type { DynamicModule, OnInit, OnStop } from "@spinejs/core";
+import type { GatewayContext } from "@spinejs/gateway-core";
 import { validatePolicies, ThrottleConfigError } from "./policy-validation";
 import { InMemoryThrottleStore } from "./memory-store";
 import { ThrottleInterceptor } from "./interceptor";
-import { validateRouteThrottleMeta } from "./engine";
+import { ThrottleMetaValidator } from "./meta-validator";
 import type { ResolvedThrottleConfig } from "./engine";
 import type {
   Clock,
@@ -15,28 +14,6 @@ import type {
   ThrottlePolicy,
   ThrottleStore,
 } from "./throttle.types";
-
-/**
- * The minimal readonly view of a bound route the boot-time walk needs: only its opaque `meta` (the
- * `meta.throttle` namespace, AD-3). Both `HttpGateway.routes` and `ElectronIpcGateway.routes`
- * (readonly `LoadedRoute[]`) satisfy it structurally.
- */
-export interface RouteSnapshot {
-  meta?: unknown;
-}
-
-/**
- * A provider of a transport's readonly route snapshot (NFR-3, Story 2.2). Wire it to the gateway
- * whose `interceptors` slot holds this throttle instance — the module's start hook walks the routes
- * it returns and validates every `meta.throttle` spec, so a bad route-inline policy fails **boot**
- * (with the route/channel named) rather than the first dispatch:
- *
- *   ThrottleModule.configure({
- *     policies: { ... },
- *     routes: { inject: [HttpGateway], factory: (gw: HttpGateway) => () => gw.routes },
- *   })
- */
-export type RouteSnapshotSource = () => readonly RouteSnapshot[];
 
 /** Options of one `ThrottleModule.configure()` call (FR-2). */
 export interface ThrottleModuleOptions {
@@ -62,14 +39,6 @@ export interface ThrottleModuleOptions {
   clock?: Clock;
   /** Instance name for multi-gateway apps — each name is a fully isolated instance (AD-7). */
   name?: string;
-  /**
-   * Boot-time route-inline validation (NFR-3, Story 2.2): a provider yielding the gateway's
-   * readonly route snapshot. The module's start hook walks it and validates every `meta.throttle`
-   * spec with the same rules as `configure`-level validation, so a bad inline policy fails boot,
-   * never the first dispatch. Omit it to keep the interim request-path guard only (see
-   * {@link RouteSnapshotSource}).
-   */
-  routes?: ProviderAdapter<RouteSnapshotSource>;
 }
 
 // Internal per-instance tokens: each `configure()` returns a `fresh` module node providing its own
@@ -79,9 +48,6 @@ const ownsStoreToken = new InjectionToken<boolean>("throttle.owns-store");
 const instanceNameToken = new InjectionToken<string>("throttle.instance-name");
 const configToken = new InjectionToken<ResolvedThrottleConfig>(
   "throttle.config"
-);
-const routesSourceToken = new InjectionToken<RouteSnapshotSource>(
-  "throttle.routes-source"
 );
 
 // Instance names claimed by the currently-booted modules of THIS app (added on `onInit`, released on
@@ -95,6 +61,15 @@ const activeInstanceNames = new Set<string>();
 // always returns the same token object, so the providing node and the injecting app agree on it
 // (the mikro-orm `mikroOrmRef` precedent).
 const interceptorRefs = new Map<string, InjectionToken<ThrottleInterceptor>>();
+
+// Public meta-validator token registry, memoized per instance name (mirrors `interceptorRefs`). The
+// interceptor (runtime, per-request) and the meta-validator (boot-time, per-route) are two separate
+// tokens of the same named instance: the app places the interceptor in `interceptors` and the
+// validator in `metaValidators` of the SAME gateway.
+const metaValidatorRefs = new Map<
+  string,
+  InjectionToken<ThrottleMetaValidator>
+>();
 
 /**
  * The interceptor token of a named throttle instance (default instance when `name` is omitted).
@@ -122,11 +97,38 @@ export function throttleInterceptorRef(
 }
 
 /**
+ * The `MetaValidator` token of a named throttle instance (default instance when `name` is omitted).
+ * Inject it where the gateway's `metaValidators` are provided — the SAME gateway whose `interceptors`
+ * hold this instance's interceptor, so the routes validated at boot are exactly the routes enforced at
+ * runtime (closes review findings F-B/F-C):
+ *
+ *   HttpGatewayModule.configure({
+ *     interceptors:   { inject: [throttleInterceptorRef()],   factory: (t) => [t] },
+ *     metaValidators: { inject: [throttleMetaValidatorRef()], factory: (v) => [v] },
+ *     ...
+ *   })
+ */
+export function throttleMetaValidatorRef(
+  name = "default"
+): InjectionToken<ThrottleMetaValidator> {
+  let token = metaValidatorRefs.get(name);
+  if (!token) {
+    token = new InjectionToken<ThrottleMetaValidator>(
+      `throttle.meta-validator.${name}`
+    );
+    metaValidatorRefs.set(name, token);
+  }
+  return token;
+}
+
+/**
  * Rate-limiting battery module. `configure({ policies, ... })` validates the configuration at boot
  * (NFR-3 — misconfiguration explodes at startup, never at request time) and returns an **isolated**
- * `fresh` module node exposing this instance's interceptor under `throttleInterceptorRef(name)`.
+ * `fresh` module node exposing this instance's interceptor under `throttleInterceptorRef(name)` and
+ * its boot-time `MetaValidator` under `throttleMetaValidatorRef(name)`.
  *
- * Per-gateway wiring (FR-2): the app places that interceptor in ONE gateway's `interceptors`; a
+ * Per-gateway wiring (FR-2): the app places that interceptor in ONE gateway's `interceptors` and the
+ * matching validator in the SAME gateway's `metaValidators`; a
  * multi-gateway app calls `configure({ name })` once per gateway — two names, two instances, two
  * stores. Config never merges per class (AD-7, the mikro-orm fresh-node precedent). No
  * configuration → no interceptor in the chain → no throttling and zero overhead.
@@ -136,21 +138,14 @@ export function throttleInterceptorRef(
  * gateway (e.g. a shared Redis-backed store).
  */
 @Module({
-  inject: [
-    storeToken,
-    ownsStoreToken,
-    instanceNameToken,
-    configToken,
-    routesSourceToken,
-  ] as const,
+  inject: [storeToken, ownsStoreToken, instanceNameToken, configToken] as const,
 })
-export class ThrottleModule implements OnInit, OnStart, OnStop {
+export class ThrottleModule implements OnInit, OnStop {
   constructor(
     private readonly store: ThrottleStore,
     private readonly ownsStore: boolean,
     private readonly instanceName: string,
-    private readonly config: ResolvedThrottleConfig,
-    private readonly routesSource: RouteSnapshotSource
+    private readonly config: ResolvedThrottleConfig
   ) {}
 
   /** Claims this instance's name for the app, failing loud if another instance already holds it (AD-7). */
@@ -163,24 +158,6 @@ export class ThrottleModule implements OnInit, OnStart, OnStop {
       );
     }
     activeInstanceNames.add(this.instanceName);
-  }
-
-  /**
-   * Boot-time route-inline validation (NFR-3, Story 2.2). Runs after every module's `onInit` (so all
-   * feature modules have registered their routes on the gateway), walks the wired transport route
-   * snapshot and validates every `meta.throttle` spec with the SAME rules as `configure`-level
-   * validation. An invalid inline spec (e.g. `'ip'` on IPC, a bad `limit`) fails the app start with
-   * the route/channel named — reconciling the engine's interim request-path guard by catching it
-   * pre-dispatch. No `routes` provider wired → an empty snapshot → the request-path guard stands.
-   */
-  onStart(): void {
-    for (const route of this.routesSource()) {
-      validateRouteThrottleMeta(
-        route.meta,
-        this.config.policies,
-        this.config.keySources
-      );
-    }
   }
 
   /** Releases the name claim and disposes the owned default store (its unref'd sweep) when the app stops. */
@@ -221,21 +198,23 @@ export class ThrottleModule implements OnInit, OnStart, OnStop {
         { provide: ownsStoreToken, value: options.store === undefined },
         { provide: instanceNameToken, value: name },
         { provide: configToken, value: config },
-        // The route-snapshot source drives the boot walk (NFR-3). Default: no snapshot wired → an
-        // empty walk (the engine's request-path guard still fires). The app opts into boot-time
-        // validation by wiring `routes` to its gateway (`() => gateway.routes`).
-        toProvider(
-          routesSourceToken,
-          options.routes ?? { value: (): readonly RouteSnapshot[] => [] }
-        ),
         {
           provide: throttleInterceptorRef(name),
           inject: [storeToken] as const,
           factory: (store: ThrottleStore) =>
             new ThrottleInterceptor(config, store),
         },
+        // Boot-time route-inline validation (NFR-3): the app places this in the gateway's
+        // `metaValidators` slot and the gateway walks its own routes against it at start. Stateless
+        // (reads only the resolved config), so no store dependency.
+        {
+          provide: throttleMetaValidatorRef(name),
+          inject: [configToken] as const,
+          factory: (resolved: ResolvedThrottleConfig) =>
+            new ThrottleMetaValidator(resolved),
+        },
       ],
-      exports: [throttleInterceptorRef(name)],
+      exports: [throttleInterceptorRef(name), throttleMetaValidatorRef(name)],
     };
   }
 }

@@ -250,20 +250,45 @@ une transaction) n'est jamais exécuté à la connexion.
 
 Le boot échoue sur une mauvaise politique de **configure** d'office (limit non positive, nom dupliqué,
 `'ip'` sur IPC, …). Pour valider aussi les specs **route-inline** au démarrage — pour qu'une coquille
-échoue au boot, pas au premier dispatch — câblez le snapshot readonly des routes de la gateway :
+échoue au boot, pas au premier dispatch — placez le **meta validateur** de throttle dans les
+`metaValidators` de la gateway, à côté de l'intercepteur dans `interceptors`, sur la **même** gateway :
 
 ```typescript
-ThrottleModule.configure({
-  policies: {
+import {
+  throttleInterceptorRef,
+  throttleMetaValidatorRef,
+} from "@spinejs/throttle";
+
+HttpGatewayModule.configure({
+  imports: [
+    ThrottleModule.configure({
+      policies: {
+        /* ... */
+      },
+      ...throttleHttp(),
+    }),
+  ],
+  contextFactory: {
     /* ... */
   },
-  ...throttleHttp(),
-  routes: { inject: [HttpGateway], factory: (gw) => () => gw.routes },
+  interceptors: {
+    inject: [throttleInterceptorRef()],
+    factory: (throttle) => [throttle], // application à la requête / à la connexion SSE
+  },
+  metaValidators: {
+    inject: [throttleMetaValidatorRef()],
+    factory: (validator) => [validator], // validation au boot du `meta.throttle` de chaque route
+  },
 });
 ```
 
-`HttpGateway.routes` et `ElectronIpcGateway.routes` exposent tous deux le snapshot readonly que la
-traversée lit.
+`metaValidators` est une primitive du framework ([`MetaValidator`](../gateway/interceptors.md#valider-le-meta-des-routes-au-boot)) :
+au démarrage, la gateway croise **ses propres** routes avec **ses propres** validateurs et fait échouer
+le boot avec la route nommée sur tout `meta.throttle` invalide (un `keyBy` non câblé, un `skip`/`override`
+nommant un défaut inconnu, une valeur d'`override` exotique). Comme le validateur vit sur la gateway qui
+_applique_ le throttling, les routes validées sont exactement les routes appliquées — une app
+multi-gateway ne valide jamais de façon croisée. Utilisez le nom correspondant pour une instance
+nommée : `throttleMetaValidatorRef("public")`.
 
 ### Observer les rejets
 
@@ -313,18 +338,21 @@ ThrottleModule.configure({
 
 ### `ThrottleModule.configure(options): DynamicModule`
 
-| Option           | Type                                   | Notes                                                                                                       |
-| ---------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `policies`       | `Record<string, ThrottlePolicy>`       | Politiques par défaut de gateway, par nom unique. Les noms ne peuvent pas contenir `#`.                     |
-| `store`          | `ThrottleStore`                        | Store personnalisé (ex. Redis). Défaut : le store in-memory à log glissant intégré (possédé par le module). |
-| `keySources`     | `Record<string, KeySelector>`          | Sources nommées qu'un `keyBy` string résout (`'ip'`/`'sender'` depuis les presets).                         |
-| `onLimitReached` | `(e: LimitReachedEvent) => void`       | Émis à chaque rejet : `{ policyName, routeId, keyHash, retryAfterMs }`.                                     |
-| `onError`        | `(e: ThrottleErrorEvent) => void`      | Émis sur un sélecteur qui jette / une panne du store (télémétrie fail-closed **et** fail-open).             |
-| `onOutcome`      | `(ctx) => void`                        | Invoqué une fois par dispatch après l'écriture du slot d'outcome (le traducteur d'en-têtes `./http`).       |
-| `emitRawKey`     | `boolean`                              | Passe aussi la clé brute (pré-hash) à `onLimitReached`. Désactivé par défaut (PII).                         |
-| `clock`          | `Clock`                                | Source de temps injectable pour le store par défaut (monotone) — tests déterministes.                       |
-| `name`           | `string`                               | Nom d'instance pour les apps multi-gateway ; chaque nom est totalement isolé (jamais fusionné).             |
-| `routes`         | `ProviderAdapter<RouteSnapshotSource>` | Câblez `() => gateway.routes` pour valider les specs route-inline au boot.                                  |
+| Option           | Type                              | Notes                                                                                                       |
+| ---------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `policies`       | `Record<string, ThrottlePolicy>`  | Politiques par défaut de gateway, par nom unique. Les noms ne peuvent pas contenir `#`.                     |
+| `store`          | `ThrottleStore`                   | Store personnalisé (ex. Redis). Défaut : le store in-memory à log glissant intégré (possédé par le module). |
+| `keySources`     | `Record<string, KeySelector>`     | Sources nommées qu'un `keyBy` string résout (`'ip'`/`'sender'` depuis les presets).                         |
+| `onLimitReached` | `(e: LimitReachedEvent) => void`  | Émis à chaque rejet : `{ policyName, routeId, keyHash, retryAfterMs }`.                                     |
+| `onError`        | `(e: ThrottleErrorEvent) => void` | Émis sur un sélecteur qui jette / une panne du store (télémétrie fail-closed **et** fail-open).             |
+| `onOutcome`      | `(ctx) => void`                   | Invoqué une fois par dispatch après l'écriture du slot d'outcome (le traducteur d'en-têtes `./http`).       |
+| `emitRawKey`     | `boolean`                         | Passe aussi la clé brute (pré-hash) à `onLimitReached`. Désactivé par défaut (PII).                         |
+| `clock`          | `Clock`                           | Source de temps injectable pour le store par défaut (monotone) — tests déterministes.                       |
+| `name`           | `string`                          | Nom d'instance pour les apps multi-gateway ; chaque nom est totalement isolé (jamais fusionné).             |
+
+Pour valider les specs route-inline au boot, placez `throttleMetaValidatorRef(name)` dans les
+`metaValidators` de la gateway (voir [Valider les specs route-inline au boot](#valider-les-specs-route-inline-au-boot)) —
+il est exporté par `configure` à côté de `throttleInterceptorRef(name)`, ce n'est pas une option de `configure`.
 
 ### `ThrottlePolicy`
 

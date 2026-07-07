@@ -84,6 +84,38 @@ La gateway HTTP dérive sa chaîne de connexion depuis la **même** liste `inter
 
 Un intercepteur qui ne doit agir **qu'**à la connexion (rien sur les requêtes bufferisées) vit quand même dans la liste `interceptors` : donnez-lui donc une méthode de requête pass-through — `intercept(t, c, i, next) { return next(); }`. L'application à la connexion est un sous-ensemble d'`interceptors`, pas une liste indépendante.
 
+## Valider le meta des routes au boot
+
+Les intercepteurs s'exécutent à la **requête**. Une primitive séparée et complémentaire — `MetaValidator` — s'exécute au **boot** : elle valide la tranche namespacée du `meta` de chaque route (ex. `meta.throttle`) pour qu'une coquille échoue au démarrage, pas au premier dispatch. C'est un concept **différent** d'un intercepteur (type différent, slot différent, cycle de vie différent) — ne confondez pas les deux.
+
+Câblez les validateurs via le même schéma d'adaptateur `configure()`, dans le slot `metaValidators`. Une battery expose un token de validateur que vous placez à côté de son intercepteur, sur la **même** gateway :
+
+```typescript
+HttpGatewayModule.configure({
+  imports: [ThrottleModule.configure({ policies: {} })],
+  contextFactory: {
+    /* ... */
+  },
+  interceptors: { inject: [throttleInterceptorRef()], factory: (i) => [i] }, // à la requête
+  metaValidators: { inject: [throttleMetaValidatorRef()], factory: (v) => [v] }, // au boot
+});
+```
+
+Au démarrage, la gateway croise **ses propres** routes avec **ses propres** validateurs — pour chaque route dont le `meta` porte le `namespace` d'un validateur, elle appelle `validate(routeId, meta[namespace])` ; un throw fait échouer le boot avec la route nommée, avant que le transport n'ouvre (HTTP : avant `listen()`). Aucun validateur câblé → aucune traversée (rétrocompatible). Comme la gateway possède les deux moitiés, les routes validées sont exactement celles que cette gateway applique — un validateur ne peut jamais être câblé à la mauvaise gateway.
+
+Un validateur implémente une seule méthode, exécutée au boot :
+
+```typescript
+import type { MetaValidator } from "@spinejs/gateway-core";
+
+class ThrottleMetaValidator implements MetaValidator {
+  readonly namespace = "throttle"; // seules les routes portant `meta.throttle` sont validées
+  validate(routeId: string, meta: unknown): void {
+    /* lever une erreur de config typée (route nommée) sur une spec invalide */
+  }
+}
+```
+
 ## Ordre d'exécution
 
 Les intercepteurs sont chaînés dans l'ordre d'enregistrement. Le premier intercepteur du tableau est l'enveloppe la plus externe — il s'exécute en premier à l'aller et en dernier au retour :
